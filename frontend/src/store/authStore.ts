@@ -21,7 +21,7 @@ interface AuthState {
   updateUser: (data: Partial<User>) => void
 }
 
-const API_BASE = 'http://localhost:3001/api'
+const API_BASE = '/api'
 
 function getInitialUser(): { user: User | null; isAuthenticated: boolean } {
   try {
