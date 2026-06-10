@@ -3,13 +3,12 @@ import { create } from 'zustand'
 export type UserRole = 'admin' | 'manager' | 'staff'
 
 export interface User {
-  id: string
+  id: number | string
   firstName: string
   lastName: string
   email: string
   role: UserRole
   region: string
-  avatar?: string
 }
 
 interface AuthState {
@@ -22,21 +21,18 @@ interface AuthState {
   updateUser: (data: Partial<User>) => void
 }
 
-const MOCK_USERS: Array<User & { password: string }> = [
-  { id: '1', firstName: 'Admin', lastName: 'User', email: 'admin@paysync.cloud', password: 'admin123', role: 'admin', region: 'us-east-1' },
-  { id: '2', firstName: 'Jane', lastName: 'Manager', email: 'manager@paysync.cloud', password: 'manager123', role: 'manager', region: 'us-east-1' },
-  { id: '3', firstName: 'John', lastName: 'Staff', email: 'staff@paysync.cloud', password: 'staff123', role: 'staff', region: 'us-west-1' },
-]
+const API_BASE = 'http://localhost:3001/api'
 
 function getInitialUser(): { user: User | null; isAuthenticated: boolean } {
   try {
     const stored = localStorage.getItem('paysync_user')
-    if (stored) {
-      const user = JSON.parse(stored) as User
-      return { user, isAuthenticated: true }
+    const token = localStorage.getItem('paysync_token')
+    if (stored && token) {
+      return { user: JSON.parse(stored) as User, isAuthenticated: true }
     }
   } catch {
     localStorage.removeItem('paysync_user')
+    localStorage.removeItem('paysync_token')
   }
   return { user: null, isAuthenticated: false }
 }
@@ -48,41 +44,53 @@ export const useAuthStore = create<AuthState>((set) => ({
   isAuthenticated: initial.isAuthenticated,
   isLoading: false,
 
-  initialize: () => {
-    const { user, isAuthenticated } = getInitialUser()
-    set({ user, isAuthenticated })
-  },
-
   login: async (email: string, password: string) => {
     set({ isLoading: true })
-    await new Promise((r) => setTimeout(r, 600))
-    const found = MOCK_USERS.find((u) => u.email === email && u.password === password)
-    if (!found) {
+    try {
+      const res = await fetch(`${API_BASE}/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'Invalid credentials' }))
+        throw new Error(err.error)
+      }
+      const data = await res.json()
+      localStorage.setItem('paysync_user', JSON.stringify(data.user))
+      localStorage.setItem('paysync_token', data.token)
+      set({ user: data.user, isAuthenticated: true, isLoading: false })
+    } catch (err) {
       set({ isLoading: false })
-      throw new Error('Invalid email or password')
+      throw err
     }
-    const { password: _, ...user } = found
-    localStorage.setItem('paysync_user', JSON.stringify(user))
-    set({ user: user as User, isAuthenticated: true, isLoading: false })
   },
 
   register: async (data) => {
     set({ isLoading: true })
-    await new Promise((r) => setTimeout(r, 600))
-    const newUser: User = {
-      id: String(Date.now()),
-      firstName: data.firstName,
-      lastName: data.lastName,
-      email: data.email,
-      role: data.role || 'staff',
-      region: 'us-east-1',
+    try {
+      const res = await fetch(`${API_BASE}/auth/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'Registration failed' }))
+        throw new Error(err.error)
+      }
+      const result = await res.json()
+      localStorage.setItem('paysync_user', JSON.stringify(result.user))
+      localStorage.setItem('paysync_token', result.token)
+      set({ user: result.user, isAuthenticated: true, isLoading: false })
+    } catch (err) {
+      set({ isLoading: false })
+      throw err
     }
-    localStorage.setItem('paysync_user', JSON.stringify(newUser))
-    set({ user: newUser, isAuthenticated: true, isLoading: false })
   },
 
   logout: () => {
     localStorage.removeItem('paysync_user')
+    localStorage.removeItem('paysync_token')
     set({ user: null, isAuthenticated: false })
   },
 

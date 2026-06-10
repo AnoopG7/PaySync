@@ -1,37 +1,45 @@
-// ── Simulated API client (all data is fake/random) ─────────────────────────
+const API_BASE = 'http://localhost:3001/api'
 
-import {
-  generateKPIs,
-  generateSystemMetrics,
-  generateTransactions,
-  generateTasks,
-  generateAlerts,
-  generateTimeSeriesData,
-} from './fake-data'
+function getToken(): string | null {
+  try {
+    return localStorage.getItem('paysync_token')
+  } catch {
+    return null
+  }
+}
 
-const delay = (ms = 400) => new Promise((r) => setTimeout(r, ms))
+async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const token = getToken()
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...((options.headers as Record<string, string>) || {}),
+  }
+  if (token) headers['Authorization'] = `Bearer ${token}`
+
+  const res = await fetch(`${API_BASE}${path}`, { ...options, headers })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }))
+    throw new Error(err.error || `Request failed: ${res.status}`)
+  }
+  return res.json()
+}
 
 export const api = {
-  // Dashboard
-  getKPIs: async () => { await delay(); return generateKPIs() },
-  getSystemMetrics: async () => { await delay(); return generateSystemMetrics() },
-  getRecentTransactions: async (count = 10) => { await delay(); return generateTransactions(count) },
-  getTimeSeries: async (_metric: string, points = 24) => { await delay(); return generateTimeSeriesData(points) },
+  getKPIs: () => request<any>('/kpis'),
+  getSystemMetrics: () => request<any>('/metrics'),
+  getRecentTransactions: (count = 10) =>
+    request<any[]>('/transactions').then((txns) => txns.slice(0, count)),
+  getTimeSeries: (_metric: string, _points = 24) =>
+    request<any[]>('/kpis'),
 
-  // Reports
-  getTransactionReport: async (_from?: string, _to?: string) => { await delay(600); return generateTransactions(30) },
-  getActivityLog: async () => { await delay(600); return generateTransactions(15) },
+  getTransactionReport: () => request<any[]>('/transactions'),
+  getActivityLog: () => request<any[]>('/transactions').then((txns) => txns.slice(0, 15)),
 
-  // Workflows
-  getTasks: async () => { await delay(); return generateTasks(8) },
-  createTask: async (_data: unknown) => { await delay(); return { id: `TASK-${Date.now()}`, ..._data as object } },
-  approveTask: async (_id: string) => { await delay(); return { success: true } },
+  getTasks: () => request<any[]>('/tasks'),
+  createTask: (_data: unknown) => request<any>('/tasks', { method: 'POST', body: JSON.stringify(_data) }),
+  approveTask: (_id: string) => request<any>(`/tasks/${_id}/approve`, { method: 'POST' }),
 
-  // Monitoring
-  getMetrics: async () => { await delay(); return generateSystemMetrics() },
-  getAlerts: async () => { await delay(); return generateAlerts(10) },
-  acknowledgeAlert: async (_id: string) => { await delay(); return { success: true } },
-
-  // Pricing
-  getPricingEstimate: async (_params: unknown) => { await delay(600); return { total: 4850, breakdown: { compute: 2400, storage: 850, network: 600, backup: 500, monitoring: 500 } } },
+  getMetrics: () => request<any>('/metrics'),
+  getAlerts: () => request<any[]>('/alerts'),
+  acknowledgeAlert: (_id: string) => request<any>(`/alerts/${_id}/ack`, { method: 'POST' }),
 }
