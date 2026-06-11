@@ -106,7 +106,7 @@ JWT_SECRET=paysync-ec2-$(openssl rand -hex 16)
 
 # ── For RDS MySQL deployment, replace DB_TYPE and uncomment: ──
 # DB_TYPE=mysql
-# DB_HOST=paysync-mysql.xxxxxx.us-east-1.rds.amazonaws.com
+# DB_HOST=paysync-mysql.xxxxxx.ap-south-1.rds.amazonaws.com
 # DB_PORT=3306
 # DB_NAME=paysync
 # DB_USER=paysync_admin

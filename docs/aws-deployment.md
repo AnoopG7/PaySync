@@ -1,13 +1,14 @@
 # AWS Deployment Guide — PaySync Cloud
 
 > **Last Updated:** June 2026  
+> **Region:** ap-south-1 (Mumbai)  
 > **Prerequisites:** AWS account, Terraform installed, SSH key pair
 
 ---
 
 ## Table of Contents
 
-1. [Overview](#1-overview)
+1. [Quick Start (10 minutes)](#1-quick-start-10-minutes)
 2. [Prerequisites](#2-prerequisites)
 3. [Infrastructure Deployment (Terraform)](#3-infrastructure-deployment-terraform)
 4. [EC2 Bootstrap & Application Launch](#4-ec2-bootstrap--application-launch)
@@ -19,13 +20,65 @@
 
 ---
 
-## 1. Overview
+## 1. Quick Start (10 minutes)
 
-This guide walks through deploying the PaySync Cloud platform on AWS:
-- **EC2** m7i-flex.large running Docker Compose (Nginx + Express + React + Jenkins)
-- **RDS** db.t4g.micro MySQL (automated backups)
-- **CloudWatch** alarms for CPU, disk, status checks
-- **Jenkins** CI/CD pipeline for automated builds and deployments
+The fastest path from zero to the PaySync app in your browser:
+
+```bash
+# ── Step 1: Configure AWS (one-time) ──
+aws configure
+#   AWS Access Key ID:     AKIA...
+#   AWS Secret Access Key: wJalr...
+#   Default region:        ap-south-1
+#   Default output:        json
+
+# ── Step 2: Set up terraform variables ──
+cd terraform
+cp terraform.tfvars.example terraform.tfvars
+
+# ── Step 3: Fill in terraform.tfvars ──
+# NOTE: public_key_path must be an ABSOLUTE path (Terraform cannot expand ~)
+# Find your IP with: curl -s http://checkip.amazonaws.com
+#
+# Required values:
+#   ssh_allowed_cidr     = "YOUR_IP/32"
+#   rds_master_password  = "YourStrongPassword123!"
+#   public_key_path      = "/Users/you/.ssh/id_rsa.pub"
+
+# ── Step 4: Deploy infrastructure ──
+terraform init
+terraform plan                # review — should show ~25 resources to create
+terraform apply               # type "yes" — takes ~5 minutes
+
+# ── Step 5: Launch the app (SSH in) ──
+# Copy the EC2 IP from terraform output, then:
+ssh ubuntu@<EC2_PUBLIC_IP>
+
+# Create the .env file with RDS details (get them from terraform output):
+cd paysync-cloud
+cat > .env << 'EOF'
+DB_TYPE=mysql
+DB_HOST=<RDS_ENDPOINT>         # from terraform output
+DB_PORT=3306
+DB_NAME=paysync
+DB_USER=paysync_admin
+DB_PASSWORD=<YOUR_PASSWORD>
+JWT_SECRET=$(openssl rand -hex 32)
+NODE_ENV=production
+EOF
+
+# Start everything:
+docker compose up -d
+
+# Verify:
+curl -sf http://localhost/api/health && echo "OK"
+curl -sf http://localhost && echo "OK"
+
+# ── Done! Open in your browser ──
+open http://<EC2_PUBLIC_IP>
+# Login: admin@paysync.cloud / admin123
+# Jenkins: http://<EC2_PUBLIC_IP>:8080 (get admin password below)
+```
 
 ---
 
@@ -35,15 +88,11 @@ This guide walks through deploying the PaySync Cloud platform on AWS:
 
 ```bash
 # Required
-aws --version        # AWS CLI v2
-terraform --version  # Terraform >= 1.5
-docker --version     # Docker Engine
-docker compose version
-node --version       # Node >= 22
-
-# Optional (for CI/CD)
-jenkins              # Jenkins server (or use Jenkins-as-a-Service)
+aws --version        # AWS CLI v2 (install: brew install awscli)
+terraform --version  # Terraform >= 1.5 (install: brew install terraform)
 ```
+
+You do NOT need Docker, Node, or Jenkins on your Mac — they run on EC2.
 
 ### 2.2 AWS Account Setup
 
@@ -56,92 +105,135 @@ aws configure
 # Default output:        json
 ```
 
+> **Need credentials?** Go to AWS Console → IAM → Users → your user → Security credentials → Create access key.
+
 ### 2.3 SSH Key Pair
 
 ```bash
-# Generate an SSH key pair (if you don't have one)
+# Generate if you don't have one:
 ssh-keygen -t ed25519 -f ~/.ssh/id_rsa -N ""
 
-# The public key is used by Terraform (aws_key_pair resource)
-# The private key is used to SSH into EC2 and by Jenkins
+# The PUBLIC key (~/.ssh/id_rsa.pub) is used by Terraform to create the EC2 key pair.
+# The PRIVATE key (~/.ssh/id_rsa) is used to SSH into EC2.
 ```
+
+> **Important:** Terraform's `file()` function does NOT expand `~`. When setting `public_key_path` in `terraform.tfvars`, you MUST use an absolute path like `/Users/yourname/.ssh/id_rsa.pub`.
 
 ---
 
 ## 3. Infrastructure Deployment (Terraform)
 
-### 3.1 Directory Structure
+### 3.1 Project Structure
 
 ```
 AWS/
 ├── terraform/
-│   ├── main.tf         # VPC, 1 public + 2 private subnets, IGW, S3 Endpoint
-│   ├── ec2.tf          # EC2 m7i-flex.large in public subnet, SG (22/80/443/8080)
-│   ├── rds.tf          # RDS MySQL in private subnets, SG (3306 from EC2 only)
-│   ├── outputs.tf      # Useful output values
-│   └── variables.tf    # All configurable variables
+│   ├── main.tf              # VPC, 1 public + 2 private subnets, IGW, S3 Endpoint
+│   ├── ec2.tf               # EC2 m7i-flex.large, SG (22/80/443/8080)
+│   ├── rds.tf               # RDS MySQL db.t4g.micro, private subnets
+│   ├── outputs.tf           # Useful output values
+│   ├── variables.tf         # All configurable variables
+│   └── terraform.tfvars.example  # Template — copy, don't edit directly
 ├── cloudwatch/
-│   ├── dashboard.json        # CloudWatch dashboard widget config
-│   ├── alarms.json           # 7 alarms (CPU, disk, memory, status, RDS)
-│   └── cloudwatch-agent.json # CW Agent config for mem/disk/process metrics
+│   ├── dashboard.json       # CloudWatch dashboard widget config
+│   ├── alarms.json          # 7 alarms (CPU, disk, memory, status, RDS)
+│   └── cloudwatch-agent.json # CW Agent config (mem/disk/process)
 ├── scripts/
-│   ├── server-init.sh        # EC2 bootstrap script (referenced by ec2.tf)
-│   ├── backup.sh             # Daily DB backup
-│   ├── deploy-app.sh         # Manual app deployment
-│   ├── health-check.sh       # Cron health checks
-│   ├── install-packages.sh   # Docker & system deps
-│   ├── manage-users.sh       # Linux user management
-│   ├── monitor-system.sh     # System monitoring
-│   ├── rotate-logs.sh        # Docker log rotation
-│   ├── set-permissions.sh    # File permissions
-│   └── setup-cron.sh         # Cron job installer
+│   ├── server-init.sh       # EC2 bootstrap (runs via user_data)
+│   ├── backup.sh            # Daily DB backup
+│   ├── deploy-app.sh        # Manual app deployment
+│   ├── health-check.sh      # Cron health checks
+│   ├── install-packages.sh  # Docker & system dependencies
+│   ├── manage-users.sh      # Linux user management
+│   ├── monitor-system.sh    # System monitoring
+│   ├── rotate-logs.sh       # Docker log rotation
+│   ├── set-permissions.sh   # File permissions
+│   └── setup-cron.sh        # Cron job installer
+├── backend/                 # Express API (knex, JWT auth)
+├── frontend/                # React SPA (Vite, shadcn/ui)
+├── docker-compose.yml       # 3 services: backend, frontend, jenkins
+├── Jenkinsfile              # CI/CD pipeline
 └── docs/
+    └── aws-deployment.md    # This file
 ```
 
-### 3.2 Configure Variables
+### 3.2 What Terraform Creates
 
-Create a `terraform.tfvars` file (never commit it):
+| Resource | Spec | Notes |
+|---|---|---|
+| **VPC** | 10.0.0.0/16 | DNS hostnames enabled |
+| **Public subnet** | 10.0.1.0/24 (ap-south-1a) | EC2 lives here |
+| **Private subnet 1** | 10.0.10.0/24 (ap-south-1a) | RDS primary |
+| **Private subnet 2** | 10.0.11.0/24 (ap-south-1b) | RDS standby |
+| **Internet Gateway** | — | Public internet access |
+| **S3 Gateway Endpoint** | — | Free; RDS backups to S3 |
+| **EC2** | m7i-flex.large (2 vCPU, 8 GiB) | Ubuntu 24.04, 20 GB gp3 encrypted |
+| **RDS** | db.t4g.micro MySQL 8.0 | 20 GB gp3, 7-day backups |
+| **Security groups** | EC2 + RDS | Least-privilege rules |
+| **Elastic IP** | Static public IP | Attached to EC2 |
+
+### 3.3 Configure Variables
+
+Create `terraform.tfvars` from the example template:
+
+```bash
+cd terraform
+cp terraform.tfvars.example terraform.tfvars
+```
+
+Edit `terraform.tfvars` with your values:
 
 ```hcl
 # terraform/terraform.tfvars
-aws_region         = "ap-south-1"
+
+# REQUIRED — your public IP for SSH + Jenkins access
+# Find it: curl -s http://checkip.amazonaws.com
+ssh_allowed_cidr = "203.0.113.5/32"
+
+# REQUIRED — RDS master password (minimum 8 chars, mix of types)
 rds_master_password = "YourStrongPassword123!"
-ssh_allowed_cidr   = "YOUR_IP_ADDRESS/32"  # e.g., "203.0.113.5/32"
+
+# REQUIRED — absolute path to your SSH public key (Terraform cannot expand ~)
+public_key_path = "/Users/yourname/.ssh/id_rsa.pub"
 ```
 
-> **Security note:** For production, use a secrets manager or `terraform
-> apply -var="rds_master_password=..."` instead of plain-text files.
+> **Security note:** Never commit `terraform.tfvars`. It's in `.gitignore` already.
 
-### 3.3 Deploy
+### 3.4 Deploy
 
 ```bash
 cd terraform
 
-# Initialize Terraform
+# Initialize (downloads AWS provider, sets up backend)
 terraform init
 
-# Preview resources
+# Preview what will be created
 terraform plan
 
-# Apply (creates VPC, subnets, EC2, RDS, security groups)
-terraform apply -auto-approve
+# Apply — type "yes" when prompted
+# This takes about 4-5 minutes (RDS provisioning is the slowest part)
+terraform apply
 
-# Save outputs for later use
+# Save outputs for reference
 terraform output > ../stack-outputs.txt
 ```
 
-### 3.4 Output Values
+### 3.5 Output Values
 
-After `terraform apply`, you'll see:
+After `terraform apply` completes, you'll see:
 
 ```
 ec2_public_ip          = "54.123.45.67"
+ec2_instance_id        = "i-0abcdef1234567890"
 rds_endpoint           = "paysync-mysql.xxxxxx.ap-south-1.rds.amazonaws.com:3306"
 rds_master_username    = "paysync_admin"
 rds_database_name      = "paysync"
 application_url        = "http://54.123.45.67"
 ssh_command            = "ssh -i ~/.ssh/id_rsa ubuntu@54.123.45.67"
+jenkins_url            = "http://54.123.45.67:8080"
 ```
+
+> **Write these down** — you'll need `ec2_public_ip` and `rds_endpoint` for the next steps.
 
 ---
 
@@ -149,137 +241,151 @@ ssh_command            = "ssh -i ~/.ssh/id_rsa ubuntu@54.123.45.67"
 
 ### 4.1 Automatic Bootstrap
 
-The EC2 instance runs `server-init.sh` via `user_data` on first launch.
-This script:
+When EC2 first boots, `server-init.sh` runs automatically via `user_data`:
 
 1. Updates all system packages
-2. Installs Docker Engine (`docker-ce`, `docker-ce-cli`, `containerd.io`)
-3. Installs `docker compose` plugin
-4. Starts and enables Docker daemon
-5. Clones the application repo from GitHub
-6. Creates `.env` from template
-7. Runs `docker compose up -d`
+2. Installs Docker Engine + compose plugin
+3. Enables & starts Docker daemon
+4. Clones the application repo from GitHub
+5. **You** create the `.env` file (RDS credentials, JWT secret)
+6. **You** run `docker compose up -d`
 
-> **Note:** The bootstrap only runs on **first boot**. If you terminate the
-> instance and Terraform creates a new one, bootstrap runs again automatically.
+> The bootstrap runs **only on first boot**. If you stop/start the instance, it won't re-run.
 
-### 4.2 Manual Deployment (if bootstrap fails)
+### 4.2 Connect to EC2
 
 ```bash
-# SSH into EC2
-ssh -i ~/.ssh/id_rsa ubuntu@YOUR_EC2_IP
+# From your Mac:
+ssh -i ~/.ssh/id_rsa ubuntu@<EC2_PUBLIC_IP>
 
-# Clone the repository
-git clone https://github.com/YOUR_ORG/paysync-cloud.git
-cd paysync-cloud
+# You should see the Ubuntu MOTD and a shell prompt.
+# The repo is already cloned at /home/ubuntu/paysync-cloud/
+```
 
-# Create .env file
+### 4.3 Create the .env File
+
+The bootstrap cloned the repo, but **RDS credentials are too sensitive for user_data**. You must create `.env` manually:
+
+```bash
+cd /home/ubuntu/paysync-cloud
+
 cat > .env << 'EOF'
+# ── Database (RDS MySQL) ──
 DB_TYPE=mysql
-DB_HOST=paysync-mysql.xxxxxx.ap-south-1.rds.amazonaws.com
+DB_HOST=<RDS_ENDPOINT>                 # e.g. paysync-mysql.xxxxxx.ap-south-1.rds.amazonaws.com
 DB_PORT=3306
 DB_NAME=paysync
 DB_USER=paysync_admin
-DB_PASSWORD=YourStrongPassword123!
-JWT_SECRET=$(openssl rand -hex 32)
+DB_PASSWORD=<YOUR_RDS_PASSWORD>         # from terraform.tfvars
+
+# ── Auth ──
+JWT_SECRET=$(openssl rand -hex 32)     # generates a 64-char hex key
+
+# ── App ──
 NODE_ENV=production
 EOF
-
-# Start the application
-docker compose up -d
-
-# Verify
-docker compose ps
-curl http://localhost/api/health
 ```
 
-### 4.3 Verify Deployment
+Terraform output gives you the RDS endpoint. The shell command `$(openssl rand -hex 32)` generates a random JWT secret inline.
+
+### 4.4 Launch the Application
 
 ```bash
-# From your local machine:
-# 1. Check application is reachable
-curl http://YOUR_EC2_IP
+cd /home/ubuntu/paysync-cloud
 
-# 2. Check health endpoint
-curl http://YOUR_EC2_IP/api/health
+# Start all 3 services (backend, frontend, jenkins):
+docker compose up -d
 
-# 3. Open in browser
-open http://YOUR_EC2_IP
+# Check everything is running:
+docker compose ps
 
-# 4. Demo logins
-#    admin@paysync.cloud / admin123
-#    manager@paysync.cloud / manager123
-#    staff@paysync.cloud / staff123
+# Verify the API is healthy (via Nginx, port 80):
+curl http://localhost/api/health
+
+# Verify the frontend is served:
+curl -sI http://localhost | head -1
+# Should return: HTTP/1.1 200 OK
 ```
+
+### 4.5 Verify from Your Browser
+
+```bash
+# From your Mac:
+open http://<EC2_PUBLIC_IP>
+```
+
+You should see the PaySync login page. Use these demo accounts:
+
+| Role | Email | Password |
+|---|---|---|
+| Admin | admin@paysync.cloud | admin123 |
+| Manager | manager@paysync.cloud | manager123 |
+| Staff | staff@paysync.cloud | staff123 |
 
 ---
 
 ## 5. CI/CD Setup (Jenkins)
 
-Jenkins runs as a **Docker container on the same EC2** alongside the app
-(port 8080). The Docker socket is mounted so Jenkins can build and deploy
-locally — no separate Jenkins server or SSH deploy needed.
+Jenkins runs as a Docker container on the same EC2 (port 8080). The Docker socket is mounted so Jenkins can build and deploy locally — no separate Jenkins server or SSH deploy needed.
 
 ### 5.1 Access Jenkins
 
-After `terraform apply`, Jenkins is available at:
+```bash
+# Jenkins is already running at:
+http://<EC2_PUBLIC_IP>:8080
 
+# Get the initial admin password:
+ssh -i ~/.ssh/id_rsa ubuntu@<EC2_PUBLIC_IP>
+docker exec jenkins cat /var/jenkins_home/secrets/initialAdminPassword
+# Copy the 32-char hex string and paste in the browser
 ```
-http://YOUR_EC2_IP:8080
-```
 
-> **Note:** Port 8080 is restricted to your IP (same CIDR as SSH).
-> If you need to unlock Jenkins for the first time, SSH into EC2 and run:
-> ```bash
-> ssh -i ~/.ssh/id_rsa ubuntu@YOUR_EC2_IP
-> docker exec jenkins cat /var/jenkins_home/secrets/initialAdminPassword
-> ```
+> Port 8080 is restricted to your IP (same CIDR as SSH).
 
-### 5.2 Install Required Jenkins Plugins
+### 5.2 Install Plugins
 
-From the Jenkins dashboard → **Manage Jenkins** → **Plugins** → **Available**:
-- **Git**
-- **Pipeline**
-- **Docker Pipeline**
+From Jenkins dashboard → **Manage Jenkins** → **Plugins** → **Available plugins**:
+- Git
+- Pipeline
+- Docker Pipeline
 
-### 5.3 Create Pipeline Job
+### 5.3 Create a Pipeline Job
 
-1. In Jenkins: **New Item** → **Pipeline**
-2. Name: `paysync-cloud-deploy`
-3. Pipeline → Definition: **Pipeline script from SCM**
-4. SCM: **Git**
-5. Repository URL: `https://github.com/YOUR_ORG/paysync-cloud.git`
-6. Script Path: `Jenkinsfile`
-7. Save
+1. **New Item** → name: `paysync-cloud-deploy` → **Pipeline**
+2. **Pipeline** section → Definition: **Pipeline script from SCM**
+3. **SCM:** Git
+4. **Repository URL:** `https://github.com/YOUR_ORG/paysync-cloud.git`
+5. **Script Path:** `Jenkinsfile`
+6. **Save**
 
-### 5.4 Run Pipeline
+### 5.4 Run the Pipeline
 
 1. Click **Build with Parameters**
 2. Branch: `main`
 3. Click **Build**
 
-The pipeline will:
-- Check out code from GitHub
-- Install dependencies (npm ci)
-- Run lint + type checks (tsc --noEmit)
-- Build Docker images via `docker compose build`
-- Deploy via `docker compose up -d`
-- Verify health endpoint
+The pipeline:
+1. Checks out code from GitHub
+2. Installs dependencies (`npm ci` in frontend + backend)
+3. Runs type checks (`tsc --noEmit` in both)
+4. Builds Docker images (`docker compose build`)
+5. Deploys (`docker compose up -d`)
+6. Verifies health endpoint (`curl http://localhost/api/health`)
 
 ---
 
 ## 6. Monitoring Setup (CloudWatch)
 
-Pre-built configuration files are in `cloudwatch/`:
+Pre-built configs are in `cloudwatch/`:
 
 ```
 cloudwatch/
-├── dashboard.json          # CloudWatch dashboard (EC2 + RDS + CW Agent metrics)
+├── dashboard.json          # 5 metric widgets + error log viewer
 ├── alarms.json             # 7 alarms (CPU, disk, memory, status, RDS)
-└── cloudwatch-agent.json   # CW Agent config for OS-level metrics
+└── cloudwatch-agent.json   # CW Agent config for OS metrics
 ```
 
-### 6.1 SNS Topic for Notifications
+### 6.1 SNS Topic for Alerts
 
 ```bash
 # Create SNS topic
@@ -287,69 +393,39 @@ aws sns create-topic --name paysync-alerts
 
 # Subscribe your email
 aws sns subscribe \
-  --topic-arn arn:aws:sns:ap-south-1:xxxxxxxxxxxx:paysync-alerts \
+  --topic-arn arn:aws:sns:ap-south-1:YOUR_ACCOUNT_ID:paysync-alerts \
   --protocol email \
   --notification-endpoint your-email@example.com
 
-# Confirm subscription via the email link you receive
+# Check your email and confirm the subscription
 ```
 
 ### 6.2 Create Alarms
 
-Replace `${EC2_INSTANCE_ID}`, `${RDS_INSTANCE_ID}`, and `${SNS_TOPIC_ARN}`
-in `cloudwatch/alarms.json` with your actual values, then:
-
 ```bash
-# Requires CLI JSON parser (jq)
+# Replace placeholders in alarms.json with actual values:
+#   ${EC2_INSTANCE_ID}  →  from terraform output
+#   ${RDS_INSTANCE_ID}  →  paysync-mysql
+#   ${SNS_TOPIC_ARN}    →  from step 6.1
+
+# Install all 7 alarms:
 for alarm in $(jq -c '.Alarms[]' cloudwatch/alarms.json); do
-  eval "aws cloudwatch put-metric-alarm --cli-input-json '$(echo $alarm | sed "s/\$\{EC2_INSTANCE_ID\}/i-xxxxxxxx/;s/\$\{RDS_INSTANCE_ID\}/paysync-mysql/;s/\$\{SNS_TOPIC_ARN\}/arn:aws:sns:.../")'"
+  eval "aws cloudwatch put-metric-alarm --cli-input-json '$(echo $alarm | \
+    sed "s/\$\{EC2_INSTANCE_ID\}/i-xxxxxxxx/; \
+         s/\$\{RDS_INSTANCE_ID\}/paysync-mysql/; \
+         s/\$\{SNS_TOPIC_ARN\}/arn:aws:sns:ap-south-1:.../")'"
 done
 ```
 
-Or create alarms individually:
+### 6.3 CloudWatch Agent (OS Metrics)
 
-```bash
-# EC2 CPU
-aws cloudwatch put-metric-alarm \
-  --alarm-name "paysync-cpu-high" \
-  --metric-name CPUUtilization --namespace AWS/EC2 \
-  --statistic Average --period 300 --threshold 80 \
-  --comparison-operator GreaterThanOrEqualToThreshold \
-  --dimensions Name=InstanceId,Value=i-xxxxxxxx \
-  --evaluation-periods 1 \
-  --alarm-actions arn:aws:sns:ap-south-1:xxxx:paysync-alerts
-
-# Status check
-aws cloudwatch put-metric-alarm \
-  --alarm-name "paysync-status-check" \
-  --metric-name StatusCheckFailed --namespace AWS/EC2 \
-  --statistic Maximum --period 60 --threshold 1 \
-  --comparison-operator GreaterThanOrEqualToThreshold \
-  --dimensions Name=InstanceId,Value=i-xxxxxxxx \
-  --evaluation-periods 2 \
-  --alarm-actions arn:aws:sns:ap-south-1:xxxx:paysync-alerts
-
-# RDS CPU
-aws cloudwatch put-metric-alarm \
-  --alarm-name "paysync-rds-cpu-high" \
-  --metric-name CPUUtilization --namespace AWS/RDS \
-  --statistic Average --period 300 --threshold 80 \
-  --comparison-operator GreaterThanOrEqualToThreshold \
-  --dimensions Name=DBInstanceIdentifier,Value=paysync-mysql \
-  --evaluation-periods 2 \
-  --alarm-actions arn:aws:sns:ap-south-1:xxxx:paysync-alerts
-```
-
-### 6.3 CloudWatch Agent (OS-level Metrics)
-
-The CloudWatch Agent collects memory, disk, and process metrics not available
-from EC2 defaults. Install and configure on the EC2 instance:
+The agent collects memory, disk, and process metrics. Install on EC2:
 
 ```bash
 # SSH into EC2
-ssh -i ~/.ssh/id_rsa ubuntu@YOUR_EC2_IP
+ssh -i ~/.ssh/id_rsa ubuntu@<EC2_PUBLIC_IP>
 
-# Install CloudWatch Agent
+# Install
 sudo apt install -y amazon-cloudwatch-agent
 
 # Copy config
@@ -359,8 +435,8 @@ sudo cp /home/ubuntu/paysync-cloud/cloudwatch/cloudwatch-agent.json \
 
 # Start agent
 sudo /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
-  -a fetch-and-run -m ec2 -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json \
-  -s
+  -a fetch-and-run -m ec2 \
+  -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json -s
 
 # Verify
 sudo /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a status
@@ -369,11 +445,10 @@ sudo /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a status
 ### 6.4 CloudWatch Dashboard
 
 ```bash
-# Replace placeholders with actual values
+# Replace placeholders and create dashboard
 sed "s/\${AWS_REGION}/ap-south-1/g; s/\${EC2_INSTANCE_ID}/i-xxxxxxxx/g" \
   cloudwatch/dashboard.json > /tmp/dashboard-resolved.json
 
-# Create dashboard
 aws cloudwatch put-dashboard \
   --dashboard-name paysync-overview \
   --dashboard-body file:///tmp/dashboard-resolved.json
@@ -387,7 +462,7 @@ aws cloudwatch put-dashboard \
 
 ```bash
 # SSH into EC2
-ssh -i ~/.ssh/id_rsa ubuntu@YOUR_EC2_IP
+ssh -i ~/.ssh/id_rsa ubuntu@<EC2_PUBLIC_IP>
 
 # Check running containers
 docker compose ps
@@ -395,45 +470,37 @@ docker compose ps
 # View logs
 docker compose logs -f --tail=100 backend
 docker compose logs -f --tail=100 frontend
+docker compose logs -f --tail=50 jenkins
 
-# Check disk usage
+# Check system resources
 df -h /
-
-# Check memory
 free -h
-
-# Check health script output
-/opt/paysync/health-check.sh
 ```
 
 ### 7.2 Backup & Restore
 
-**Automated backup** runs daily via cron (`backup.sh`):
-- Dumps MySQL database from RDS
+**Automated backup** runs daily at 2 AM via cron (`scripts/backup.sh`):
+- Dumps RDS MySQL database
 - Compresses with gzip
 - Stores locally for 30 days
-- (Optional) Uploads to S3
 
 **Manual backup:**
 
 ```bash
-# SSH into EC2
-ssh -i ~/.ssh/id_rsa ubuntu@YOUR_EC2_IP
-
-# Create a manual dump
+# From EC2:
 docker compose exec -T backend mysqldump \
   -h $DB_HOST -u $DB_USER -p$DB_PASSWORD $DB_NAME \
   | gzip > /tmp/paysync-manual-$(date +%F).sql.gz
 ```
 
-**Restore from backup:**
+**Restore:**
 
 ```bash
 # Copy backup file to EC2
-scp -i ~/.ssh/id_rsa backup.sql.gz ubuntu@YOUR_EC2_IP:/tmp/
+scp -i ~/.ssh/id_rsa backup.sql.gz ubuntu@<EC2_PUBLIC_IP>:/tmp/
 
-# Restore
-ssh -i ~/.ssh/id_rsa ubuntu@YOUR_EC2_IP
+# SSH in and restore
+ssh -i ~/.ssh/id_rsa ubuntu@<EC2_PUBLIC_IP>
 gunzip < /tmp/backup.sql.gz | docker compose exec -T backend \
   mysql -h $DB_HOST -u $DB_USER -p$DB_PASSWORD $DB_NAME
 ```
@@ -442,15 +509,14 @@ gunzip < /tmp/backup.sql.gz | docker compose exec -T backend \
 
 **With Jenkins (recommended):**
 1. Push changes to GitHub
-2. Trigger Jenkins pipeline with `build-and-deploy` parameter
-3. Pipeline automatically deploys to EC2
+2. Trigger Jenkins pipeline
+3. Pipeline builds and deploys automatically
 
 **Manual update:**
 
 ```bash
-ssh -i ~/.ssh/id_rsa ubuntu@YOUR_EC2_IP
-
-cd paysync-cloud
+ssh -i ~/.ssh/id_rsa ubuntu@<EC2_PUBLIC_IP>
+cd /home/ubuntu/paysync-cloud
 git pull origin main
 docker compose build --pull
 docker compose up -d --remove-orphans
@@ -459,34 +525,22 @@ docker image prune -af --filter "until=24h"
 
 ### 7.4 Log Rotation
 
-Logs are rotated every 6 hours by cron (`rotate-logs.sh`):
-- Docker container logs are captured to `/var/log/paysync/`
-- Logs older than 7 days are gzipped
-- Gzipped logs older than 30 days are deleted
+Docker logs are rotated every 6 hours by cron (`scripts/rotate-logs.sh`):
 
 ```bash
-# View log rotation status
+# View log directory
 ls -la /var/log/paysync/
 
-# Force log rotation
+# Force rotation
 sudo /opt/paysync/scripts/rotate-logs.sh
 ```
 
-### 7.5 User Management
-
-Linux users and SSH key management via `manage-users.sh`:
+### 7.5 User Management (Linux)
 
 ```bash
-# Add a new user
 sudo /opt/paysync/scripts/manage-users.sh add john
-
-# Add SSH key for user
 sudo /opt/paysync/scripts/manage-users.sh ssh-key john "ssh-rsa AAAAB3Nza..."
-
-# List all users
 sudo /opt/paysync/scripts/manage-users.sh list
-
-# Remove a user
 sudo /opt/paysync/scripts/manage-users.sh remove john
 ```
 
@@ -498,17 +552,17 @@ sudo /opt/paysync/scripts/manage-users.sh remove john
 
 ```bash
 # 1. Check EC2 is running
-aws ec2 describe-instances --instance-ids i-xxxxxxxx
+aws ec2 describe-instances --instance-ids $(terraform output -raw ec2_instance_id)
 
-# 2. Check security group rules (port 80 should be open to 0.0.0.0/0)
-aws ec2 describe-security-groups --group-ids sg-xxxxxxxx
+# 2. Check security group rules
+aws ec2 describe-security-groups --group-ids $(terraform output -raw ec2_security_group_id)
 
-# 3. SSH into EC2 and check Docker
-ssh -i ~/.ssh/id_rsa ubuntu@YOUR_EC2_IP
+# 3. SSH in and check Docker
+ssh -i ~/.ssh/id_rsa ubuntu@<EC2_PUBLIC_IP>
 docker compose ps
-docker compose logs --tail=100
+docker compose logs --tail=50
 
-# 4. Check Nginx is running
+# 4. Check Nginx
 curl -I http://localhost:80
 
 # 5. Check backend health
@@ -518,16 +572,13 @@ curl http://localhost/api/health
 ### 8.2 Database Connection Issues
 
 ```bash
-# 1. Check RDS is in available state
+# 1. Check RDS state
 aws rds describe-db-instances --db-instance-identifier paysync-mysql
 
-# 2. Check security group allows MySQL from EC2
-# (ec2-sg should allow 3306, rds-sg should reference ec2-sg)
+# 2. From EC2, test connectivity
+nc -zv <RDS_ENDPOINT> 3306
 
-# 3. From EC2, test connectivity
-nc -zv paysync-mysql.xxxxxx.ap-south-1.rds.amazonaws.com 3306
-
-# 4. Check .env has correct values
+# 3. Check .env file
 cat /home/ubuntu/paysync-cloud/.env | grep DB_
 ```
 
@@ -537,13 +588,13 @@ cat /home/ubuntu/paysync-cloud/.env | grep DB_
 # Check Docker daemon
 sudo systemctl status docker
 
-# Check available disk (Docker may fail if disk is full)
+# Check disk space
 df -h /
 
-# Prune docker resources
+# Clean up Docker resources
 docker system prune -af
 
-# Rebuild containers with no cache
+# Rebuild from scratch
 docker compose build --no-cache
 docker compose up -d
 ```
@@ -558,29 +609,25 @@ docker compose up -d
 | Disk full | Docker logs or old images | Run `rotate-logs.sh` + `docker system prune` |
 | `terraform apply` fails on RDS | RDS name already taken | Change `rds_db_name` in variables |
 | Jenkins pipeline timeout | Network issues on EC2 | Check internet gateway + route table |
+| `file() error` in terraform | `~` not expanded in public_key_path | Use absolute path like `/Users/you/.ssh/id_rsa.pub` |
 
 ---
 
 ## 9. Teardown
 
-### 9.1 Destroy Infrastructure
+### 9.1 Destroy Everything (Terraform)
 
 ```bash
-# ⚠️ WARNING: This destroys ALL infrastructure. Data will be lost.
+# ⚠️ WARNING: Destroys ALL infrastructure. Data is lost.
 
 cd terraform
-
-# Destroy all resources (requires confirmation)
-terraform destroy
-
-# Or auto-approve
 terraform destroy -auto-approve
 ```
 
 ### 9.2 Manual Cleanup (if terraform fails)
 
 ```bash
-# Delete RDS (must remove deletion_protection first)
+# Delete RDS
 aws rds modify-db-instance \
   --db-instance-identifier paysync-mysql \
   --deletion-protection false
@@ -591,11 +638,8 @@ aws rds delete-db-instance \
 # Terminate EC2
 aws ec2 terminate-instances --instance-ids i-xxxxxxxxxxxxxxxxx
 
-# Delete VPC
+# Delete VPC (this will fail if dependencies remain)
 aws ec2 delete-vpc --vpc-id vpc-xxxxxxxx
-
-# Release Elastic IP
-aws ec2 release-address --allocation-id eipalloc-xxxxxxxx
 ```
 
 ---
@@ -624,16 +668,12 @@ docker system prune -af # Clean everything
 aws ec2 describe-instances --filters "Name=tag:Name,Values=paysync-app-server"
 aws rds describe-db-instances --db-instance-identifier paysync-mysql
 aws cloudwatch describe-alarms
-
-# Git
-git log --oneline -10   # Recent commits
-git diff main...HEAD    # Changes since main
 ```
 
 ### Cron Jobs on EC2
 
 ```cron
-# Managed by setup-cron.sh
+# Managed by scripts/setup-cron.sh
 */5 * * * * /opt/paysync/scripts/health-check.sh          # Health check every 5 min
 0 2 * * * /opt/paysync/scripts/backup.sh                  # Backup daily at 2 AM
 0 */6 * * * /opt/paysync/scripts/rotate-logs.sh           # Log rotation every 6 hours
@@ -643,8 +683,8 @@ git diff main...HEAD    # Changes since main
 
 | Path | Purpose |
 |---|---|
-| `/home/ubuntu/paysync-cloud/` | Application code |
+| `/home/ubuntu/paysync-cloud/` | Application code (cloned repo) |
 | `/opt/paysync/scripts/` | Shell scripts |
 | `/var/log/paysync/` | Application logs |
 | `/etc/cron.d/paysync` | Cron jobs |
-| `/home/ubuntu/.env` | Environment variables |
+| `/home/ubuntu/paysync-cloud/.env` | Environment variables |
