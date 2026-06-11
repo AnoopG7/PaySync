@@ -74,8 +74,8 @@ ssh-keygen -t ed25519 -f ~/.ssh/id_rsa -N ""
 
 ```
 AWS/
-├── infra/
-│   ├── main.tf         # VPC, 1 public + 1 private subnet, IGW, S3 Endpoint
+├── terraform/
+│   ├── main.tf         # VPC, 1 public + 2 private subnets, IGW, S3 Endpoint
 │   ├── ec2.tf          # EC2 m7i-flex.large in public subnet, SG (22/80/443/8080)
 │   ├── rds.tf          # RDS MySQL in private subnets, SG (3306 from EC2 only)
 │   ├── outputs.tf      # Useful output values
@@ -84,11 +84,18 @@ AWS/
 │   ├── dashboard.json        # CloudWatch dashboard widget config
 │   ├── alarms.json           # 7 alarms (CPU, disk, memory, status, RDS)
 │   └── cloudwatch-agent.json # CW Agent config for mem/disk/process metrics
-├── backend/
-│   └── scripts/
-│       └── server-init.sh    # EC2 bootstrap script (referenced by ec2.tf)
+├── scripts/
+│   ├── server-init.sh        # EC2 bootstrap script (referenced by ec2.tf)
+│   ├── backup.sh             # Daily DB backup
+│   ├── deploy-app.sh         # Manual app deployment
+│   ├── health-check.sh       # Cron health checks
+│   ├── install-packages.sh   # Docker & system deps
+│   ├── manage-users.sh       # Linux user management
+│   ├── monitor-system.sh     # System monitoring
+│   ├── rotate-logs.sh        # Docker log rotation
+│   ├── set-permissions.sh    # File permissions
+│   └── setup-cron.sh         # Cron job installer
 └── docs/
-    └── aws-deployment.md     # This file
 ```
 
 ### 3.2 Configure Variables
@@ -96,7 +103,7 @@ AWS/
 Create a `terraform.tfvars` file (never commit it):
 
 ```hcl
-# infra/terraform.tfvars
+# terraform/terraform.tfvars
 aws_region         = "ap-south-1"
 rds_master_password = "YourStrongPassword123!"
 ssh_allowed_cidr   = "YOUR_IP_ADDRESS/32"  # e.g., "203.0.113.5/32"
@@ -108,7 +115,7 @@ ssh_allowed_cidr   = "YOUR_IP_ADDRESS/32"  # e.g., "203.0.113.5/32"
 ### 3.3 Deploy
 
 ```bash
-cd infra
+cd terraform
 
 # Initialize Terraform
 terraform init
@@ -561,7 +568,7 @@ docker compose up -d
 ```bash
 # ⚠️ WARNING: This destroys ALL infrastructure. Data will be lost.
 
-cd infra
+cd terraform
 
 # Destroy all resources (requires confirmation)
 terraform destroy

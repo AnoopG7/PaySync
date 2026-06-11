@@ -15,7 +15,7 @@ set -euo pipefail
 PAYSYNC_HOME="/opt/paysync"
 BRANCH="${1:-main}"
 COMPOSE_FILE="${PAYSYNC_HOME}/docker-compose.yml"
-BACKUP_SCRIPT="${PAYSYNC_HOME}/backend/scripts/backup.sh"
+BACKUP_SCRIPT="${PAYSYNC_HOME}/scripts/backup.sh"
 TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
 DEPLOY_LOG="/var/log/paysync/deploy.log"
 

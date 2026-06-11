@@ -16,7 +16,7 @@
 # ──────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-SCRIPTS_DIR="/opt/paysync/backend/scripts"
+SCRIPTS_DIR="/opt/paysync/scripts"
 CRON_FILE="/tmp/paysync-crontab"
 
 echo "=== PaySync Cron Setup ==="

@@ -74,9 +74,8 @@ variable "ssh_allowed_cidr" {
 }
 
 variable "public_key_path" {
-  description = "Path to your SSH public key (e.g. ~/.ssh/id_rsa.pub)"
+  description = "Path to your SSH public key (e.g. /Users/you/.ssh/id_rsa.pub). Terraform's file() does NOT expand ~ — use an absolute path."
   type        = string
-  default     = "~/.ssh/id_rsa.pub"
 }
 
 variable "environment" {

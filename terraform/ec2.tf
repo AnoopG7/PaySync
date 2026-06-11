@@ -92,7 +92,7 @@ resource "aws_instance" "app" {
   vpc_security_group_ids = [aws_security_group.ec2.id]
   key_name               = aws_key_pair.deploy.key_name
 
-  user_data = base64encode(templatefile("${path.module}/../backend/scripts/server-init.sh", {
+  user_data = templatefile("${path.module}/../scripts/server-init.sh", {
     GIT_REPO_URL = "https://github.com/YOUR_ORG/paysync-cloud.git"
     DEPLOY_BRANCH = "main"
   }))
