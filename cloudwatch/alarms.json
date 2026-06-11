@@ -1,0 +1,138 @@
+{
+  "Alarms": [
+    {
+      "AlarmName": "paysync-cpu-high",
+      "AlarmDescription": "EC2 CPU >= 80% for 5 minutes",
+      "Namespace": "AWS/EC2",
+      "MetricName": "CPUUtilization",
+      "Statistic": "Average",
+      "Period": 300,
+      "EvaluationPeriods": 1,
+      "Threshold": 80,
+      "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+      "Dimensions": [
+        {
+          "Name": "InstanceId",
+          "Value": "${EC2_INSTANCE_ID}"
+        }
+      ],
+      "AlarmActions": ["${SNS_TOPIC_ARN}"]
+    },
+    {
+      "AlarmName": "paysync-status-check-failed",
+      "AlarmDescription": "EC2 status check failed — instance may be impaired",
+      "Namespace": "AWS/EC2",
+      "MetricName": "StatusCheckFailed",
+      "Statistic": "Maximum",
+      "Period": 60,
+      "EvaluationPeriods": 2,
+      "Threshold": 1,
+      "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+      "Dimensions": [
+        {
+          "Name": "InstanceId",
+          "Value": "${EC2_INSTANCE_ID}"
+        }
+      ],
+      "AlarmActions": ["${SNS_TOPIC_ARN}"]
+    },
+    {
+      "AlarmName": "paysync-disk-high",
+      "AlarmDescription": "Root disk usage >= 90% (requires CloudWatch Agent)",
+      "Namespace": "CWAgent",
+      "MetricName": "disk_used_percent",
+      "Statistic": "Average",
+      "Period": 300,
+      "EvaluationPeriods": 2,
+      "Threshold": 90,
+      "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+      "Dimensions": [
+        {
+          "Name": "InstanceId",
+          "Value": "${EC2_INSTANCE_ID}"
+        },
+        {
+          "Name": "mount",
+          "Value": "/"
+        },
+        {
+          "Name": "fstype",
+          "Value": "ext4"
+        }
+      ],
+      "AlarmActions": ["${SNS_TOPIC_ARN}"]
+    },
+    {
+      "AlarmName": "paysync-memory-high",
+      "AlarmDescription": "Memory usage >= 90% (requires CloudWatch Agent)",
+      "Namespace": "CWAgent",
+      "MetricName": "mem_used_percent",
+      "Statistic": "Average",
+      "Period": 300,
+      "EvaluationPeriods": 2,
+      "Threshold": 90,
+      "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+      "Dimensions": [
+        {
+          "Name": "InstanceId",
+          "Value": "${EC2_INSTANCE_ID}"
+        }
+      ],
+      "AlarmActions": ["${SNS_TOPIC_ARN}"]
+    },
+    {
+      "AlarmName": "paysync-rds-cpu-high",
+      "AlarmDescription": "RDS CPU >= 80% for 5 minutes",
+      "Namespace": "AWS/RDS",
+      "MetricName": "CPUUtilization",
+      "Statistic": "Average",
+      "Period": 300,
+      "EvaluationPeriods": 2,
+      "Threshold": 80,
+      "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+      "Dimensions": [
+        {
+          "Name": "DBInstanceIdentifier",
+          "Value": "${RDS_INSTANCE_ID}"
+        }
+      ],
+      "AlarmActions": ["${SNS_TOPIC_ARN}"]
+    },
+    {
+      "AlarmName": "paysync-rds-connections-high",
+      "AlarmDescription": "RDS database connections spike alert",
+      "Namespace": "AWS/RDS",
+      "MetricName": "DatabaseConnections",
+      "Statistic": "Average",
+      "Period": 300,
+      "EvaluationPeriods": 2,
+      "Threshold": 20,
+      "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+      "Dimensions": [
+        {
+          "Name": "DBInstanceIdentifier",
+          "Value": "${RDS_INSTANCE_ID}"
+        }
+      ],
+      "AlarmActions": ["${SNS_TOPIC_ARN}"]
+    },
+    {
+      "AlarmName": "paysync-rds-storage-low",
+      "AlarmDescription": "RDS free storage < 5 GB",
+      "Namespace": "AWS/RDS",
+      "MetricName": "FreeStorageSpace",
+      "Statistic": "Average",
+      "Period": 300,
+      "EvaluationPeriods": 2,
+      "Threshold": 5368709120,
+      "ComparisonOperator": "LessThanOrEqualToThreshold",
+      "Dimensions": [
+        {
+          "Name": "DBInstanceIdentifier",
+          "Value": "${RDS_INSTANCE_ID}"
+        }
+      ],
+      "AlarmActions": ["${SNS_TOPIC_ARN}"]
+    }
+  ]
+}

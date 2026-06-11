@@ -10,9 +10,12 @@ router.get('/', async (_req: Request, res: Response) => {
     const { failed } = await db('transactions').where({ status: 'failed' }).count('* as failed').first() || { failed: 0 }
     const { volume } = await db('transactions').sum('amount as volume').first() || { volume: 0 }
 
+    const t = Number(total)
+    const s = Number(success)
+
     res.json({
-      totalTransactions: total,
-      successRate: total > 0 ? Number(((success / total) * 100).toFixed(1)) : 100,
+      totalTransactions: t,
+      successRate: t > 0 ? Number(((s / t) * 100).toFixed(1)) : 100,
       activeUsers: 450,
       pendingApprovals: 12,
       systemUptime: 99.95,

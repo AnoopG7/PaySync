@@ -1,0 +1,18 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# PaySync Cloud — Terraform Variables Example
+# ──────────────────────────────────────────────────────────────────────────────
+# Copy this file to terraform.tfvars and fill in your values.
+#
+#   cp terraform.tfvars.example terraform.tfvars
+#   terraform apply
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── REQUIRED: Your public IP for SSH + Jenkins access ──
+# Find it: curl -s http://checkip.amazonaws.com
+ssh_allowed_cidr = "203.0.113.5/32"
+
+# ── REQUIRED: RDS master password ──
+rds_master_password = "YourStrongPassword123!"
+
+# ── OPTIONAL: Path to SSH public key (default: ~/.ssh/id_rsa.pub) ──
+# public_key_path = "/Users/you/.ssh/id_rsa.pub"

@@ -1,0 +1,118 @@
+{
+  "widgets": [
+    {
+      "type": "metric",
+      "x": 0,
+      "y": 0,
+      "width": 12,
+      "height": 6,
+      "properties": {
+        "metrics": [
+          ["AWS/EC2", "CPUUtilization", { "stat": "Average", "label": "CPU %" }],
+          ["AWS/EC2", "NetworkIn",  { "stat": "Sum", "label": "Network In (bytes)", "yAxis": "right" }],
+          ["AWS/EC2", "NetworkOut", { "stat": "Sum", "label": "Network Out (bytes)", "yAxis": "right" }]
+        ],
+        "period": 300,
+        "stat": "Average",
+        "region": "${AWS_REGION}",
+        "title": "EC2 — Compute & Network",
+        "view": "timeSeries",
+        "stacked": false,
+        "liveData": false
+      }
+    },
+    {
+      "type": "metric",
+      "x": 12,
+      "y": 0,
+      "width": 12,
+      "height": 6,
+      "properties": {
+        "metrics": [
+          ["AWS/RDS", "CPUUtilization",       { "stat": "Average", "label": "CPU %" }],
+          ["AWS/RDS", "DatabaseConnections",  { "stat": "Average", "label": "Connections" }],
+          ["AWS/RDS", "FreeStorageSpace",     { "stat": "Average", "label": "Free Storage (bytes)", "yAxis": "right" }]
+        ],
+        "period": 300,
+        "stat": "Average",
+        "region": "${AWS_REGION}",
+        "title": "RDS — MySQL",
+        "view": "timeSeries",
+        "stacked": false,
+        "liveData": false
+      }
+    },
+    {
+      "type": "metric",
+      "x": 0,
+      "y": 6,
+      "width": 8,
+      "height": 6,
+      "properties": {
+        "metrics": [
+          ["CWAgent", "disk_used_percent", { "dimensions": { "InstanceId": "${EC2_INSTANCE_ID}", "mount": "/", "fstype": "ext4" }, "label": "Root disk %", "stat": "Average" }]
+        ],
+        "period": 300,
+        "stat": "Average",
+        "region": "${AWS_REGION}",
+        "title": "Disk Usage — Root",
+        "view": "timeSeries",
+        "stacked": false,
+        "liveData": false,
+        "yAxis": { "left": { "min": 0, "max": 100 } }
+      }
+    },
+    {
+      "type": "metric",
+      "x": 8,
+      "y": 6,
+      "width": 8,
+      "height": 6,
+      "properties": {
+        "metrics": [
+          ["CWAgent", "mem_used_percent", { "dimensions": { "InstanceId": "${EC2_INSTANCE_ID}" }, "label": "Memory %", "stat": "Average" }]
+        ],
+        "period": 300,
+        "stat": "Average",
+        "region": "${AWS_REGION}",
+        "title": "Memory Usage",
+        "view": "timeSeries",
+        "stacked": false,
+        "liveData": false,
+        "yAxis": { "left": { "min": 0, "max": 100 } }
+      }
+    },
+    {
+      "type": "metric",
+      "x": 16,
+      "y": 6,
+      "width": 8,
+      "height": 6,
+      "properties": {
+        "metrics": [
+          ["AWS/EC2", "StatusCheckFailed", { "stat": "Maximum", "label": "Status Check Failed", "period": 60 }]
+        ],
+        "period": 60,
+        "stat": "Maximum",
+        "region": "${AWS_REGION}",
+        "title": "EC2 Status Checks",
+        "view": "timeSeries",
+        "stacked": false,
+        "yAxis": { "left": { "min": 0, "max": 1 } }
+      }
+    },
+    {
+      "type": "log",
+      "x": 0,
+      "y": 12,
+      "width": 24,
+      "height": 6,
+      "properties": {
+        "query": "SOURCE '/aws/ec2/paysync/backend' | fields @timestamp, @message\n| filter @message like /error|Error|ERROR|exception|Exception/\n| sort @timestamp desc\n| limit 50",
+        "region": "${AWS_REGION}",
+        "title": "Backend Errors (CloudWatch Logs)",
+        "view": "table"
+      }
+    }
+  ]
+}
