@@ -72,7 +72,7 @@ pipeline {
         stage('Deploy') {
             steps {
                 sh '''
-                    docker compose -p paysync up -d --remove-orphans backend frontend
+                    docker compose -p paysync up -d --force-recreate --remove-orphans backend frontend
                     docker image prune -af --filter "until=24h" || true
                 '''
             }

@@ -135,11 +135,11 @@ fi
 
 # Add ubuntu user to docker group
 usermod -aG docker ubuntu 2>/dev/null || true
-echo "[*] Added ubuntu to docker group. (Run 'newgrp docker' after SSH to activate)"
+echo "[*] Added ubuntu to docker group. (Logout and SSH back in for it to take effect — no need for newgrp)"
 
 # Set permissions
 chmod -R 755 .
-chmod 600 .env 2>/dev/null || true
+chmod 640 .env && chgrp docker .env 2>/dev/null || true
 
 # Start Docker Compose
 docker compose up --build -d

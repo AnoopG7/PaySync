@@ -59,20 +59,21 @@ def instance = Jenkins.getInstanceOrNull()
 if (instance == null) return
 
 if (instance.getSecurity() == null) {
-    println "Setting up security..."
+    println "Setting up security: admin/admin123..."
     def hudsonRealm = new HudsonPrivateSecurityRealm(false)
     hudsonRealm.createAccount("admin", "admin123")
     instance.setSecurityRealm(hudsonRealm)
-    def strategy = new FullControlOnceLoggedInAuthorizationStrategy()
-    instance.setAuthorizationStrategy(strategy)
+    instance.setAuthorizationStrategy(new FullControlOnceLoggedInAuthorizationStrategy())
     instance.save()
     instance.getInjector().getInstance(AdminWhitelistRule.class).setMasterKillSwitch(false)
     println "Security configured: admin/admin123"
+} else {
+    println "Security already configured — skipping (use existing credentials)"
 }
 
 if (!instance.isQuietingDown()) {
-    println "Setting Jenkins URL..."
-    def url = "http://${System.getenv('PUBLIC_IP') ?: 'localhost'}:8080/"
+    def ip = new URL("http://checkip.amazonaws.com").text.trim()
+    def url = "http://${ip}:8080/"
     def loc = JenkinsLocationConfiguration.get()
     loc.setUrl(url)
     loc.setAdminAddress("admin@paysync.cloud")
@@ -81,23 +82,26 @@ if (!instance.isQuietingDown()) {
 }
 GROOVY
 
-# Export PUBLIC_IP for groovy script
-export PUBLIC_IP
-
 systemctl daemon-reload
 echo "[✓] Config written"
 
-# ── 4. Start Jenkins ──
+# ── 4. Start / Restart Jenkins ──
 echo "[4/6] Starting Jenkins..."
 systemctl enable jenkins 2>/dev/null || true
-systemctl start jenkins || true
+# Use restart — if Jenkins is already running (e.g., from apt install auto-start),
+# start is a no-op and won't pick up the new systemd override or docker group.
+systemctl restart jenkins || true
 
+# First wait: Jenkins stopping + starting up fresh
+echo "[*] Waiting for Jenkins to start..."
 for i in {1..60}; do
     STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$JENKINS_URL" 2>/dev/null || echo "000")
     if [ "$STATUS" = "200" ] || [ "$STATUS" = "403" ]; then break; fi
     sleep 3
 done
 echo "[✓] Jenkins ready (HTTP $STATUS)"
+echo "[*] Waiting for init.groovy.d scripts to execute..."
+sleep 15
 
 PASS=$(cat /var/lib/jenkins/secrets/initialAdminPassword 2>/dev/null || echo "")
 echo "[✓] Initial admin password: $PASS"
@@ -145,7 +149,7 @@ lines.append('            steps { sh "docker compose -p paysync build" }')
 lines.append('        }')
 lines.append('        stage("Deploy") {')
 lines.append('            steps {')
-lines.append('                sh "docker compose -p paysync up -d --remove-orphans backend frontend && docker image prune -af --filter until=24h || true"')
+lines.append('                sh "docker compose -p paysync up -d --force-recreate --remove-orphans backend frontend && docker image prune -af --filter until=24h || true"')
 lines.append('            }')
 lines.append('        }')
 lines.append('        stage("Health Check") {')
@@ -184,7 +188,7 @@ definition.set("class", "org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition")
 definition.set("plugin", "workflow-cps@4331.v9d06ed4658ff")
 script_el = ET.SubElement(definition, "script")
 script_el.text = script
-ET.SubElement(definition, "sandbox").text = "false"
+ET.SubElement(definition, "sandbox").text = "true"
 ET.SubElement(root, "disabled").text = "false"
 
 xml_str = ET.tostring(root, encoding="unicode", xml_declaration=False)
@@ -200,29 +204,59 @@ echo "[✓] Pipeline job config written"
 # ── 6. Install plugins + trigger ──
 echo "[6/6] Installing plugins & triggering build..."
 
-# Install CLI jar
-curl -s -o /tmp/jenkins-cli.jar "$JENKINS_URL/jnlpJars/jenkins-cli.jar"
+# Jenkins 2.555+ has strict CSRF — CLI jar auth is broken.
+# Use REST API with crumb for all operations.
 
-# Install plugins
-java -jar /tmp/jenkins-cli.jar -s "$JENKINS_URL" -auth "admin:admin123" \
-  install-plugin git workflow-aggregator blueocean 2>/dev/null || true
+# Get CSRF crumb + session cookie
+JENKINS_COOKIE=$(mktemp)
+CRUMB_JSON=$(curl -s -u "admin:admin123" -c "$JENKINS_COOKIE" "$JENKINS_URL/crumbIssuer/api/json")
+CRUMB=$(echo "$CRUMB_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['crumb'])" 2>/dev/null || echo "")
+CRUMB_HEADER=$(echo "$CRUMB_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['crumbRequestField'])" 2>/dev/null || echo "Jenkins-Crumb")
 
-# Reload job config
-java -jar /tmp/jenkins-cli.jar -s "$JENKINS_URL" -auth "admin:admin123" \
-  reload-configuration 2>/dev/null || true
+# Install plugins via Script Console (CLI jar broken in Jenkins 2.555+ due to CSRF)
+echo "[*] Installing plugins..."
+PLUGINS="git workflow-aggregator blueocean"
+for plugin in $PLUGINS; do
+    echo "  Installing $plugin..."
+    RESULT=$(curl -s -X POST -u "admin:admin123" -b "$JENKINS_COOKIE" \
+      -H "${CRUMB_HEADER}: ${CRUMB}" \
+      "$JENKINS_URL/scriptText" \
+      --data-urlencode "script=Jenkins.instance.pluginManager.install(Arrays.asList(\"$plugin\"), false).each{ println it.get() }" 2>/dev/null)
+    echo "    $RESULT"
+done
 
-sleep 3
+# Restart to load plugins
+echo "[*] Restarting to load plugins..."
+sudo systemctl restart jenkins
 
-# Only trigger build if .env has a real RDS host (not placeholder)
+for i in $(seq 1 90); do
+    STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080 2>/dev/null || echo "000")
+    if [ "$STATUS" = "200" ] || [ "$STATUS" = "403" ]; then break; fi
+    sleep 3
+done
+echo "  Jenkins ready (HTTP $STATUS)"
+
+# Re-get crumb after restart
+JENKINS_COOKIE=$(mktemp)
+CRUMB_JSON=$(curl -s -u "admin:admin123" -c "$JENKINS_COOKIE" "$JENKINS_URL/crumbIssuer/api/json")
+CRUMB=$(echo "$CRUMB_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['crumb'])" 2>/dev/null || echo "")
+CRUMB_HEADER=$(echo "$CRUMB_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['crumbRequestField'])" 2>/dev/null || echo "Jenkins-Crumb")
+
+# Trigger build via REST API (only if .env has real RDS host)
 if grep -q '__REPLACE_ME__' /opt/paysync/.env 2>/dev/null; then
     echo "[!] .env still has placeholder RDS_HOST — skipping auto-build."
-    echo "[!] After SSH, fix RDS host, then run:"
-    echo "    java -jar /tmp/jenkins-cli.jar -s $JENKINS_URL -auth 'admin:admin123' \\"
-    echo "      build paysync-pipeline -p BRANCH=main"
+    echo "[!] After SSH, fix RDS host, then trigger build:"
+    echo "    curl -X POST 'http://$PUBLIC_IP:8080/job/paysync-pipeline/buildWithParameters?BRANCH=main' -u admin:admin123"
 else
-    java -jar /tmp/jenkins-cli.jar -s "$JENKINS_URL" -auth "admin:admin123" \
-      build paysync-pipeline -p BRANCH=main 2>/dev/null || true
+    echo "[*] Triggering build..."
+    curl -s -o /dev/null -X POST \
+      -u "admin:admin123" -b "$JENKINS_COOKIE" \
+      -H "${CRUMB_HEADER}: ${CRUMB}" \
+      "$JENKINS_URL/job/paysync-pipeline/buildWithParameters?BRANCH=main"
+    echo "  Build triggered!"
 fi
+
+rm -f "$JENKINS_COOKIE"
 
 echo ""
 echo "═══════════════════════════════════════════════════════════════"
