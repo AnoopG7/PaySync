@@ -80,7 +80,7 @@ pipeline {
 
         stage('Health Check') {
             steps {
-                sleep 5
+                sleep 15
                 sh 'curl -sf http://localhost:3001/api/health && echo "Health OK" || echo "Health FAIL"'
             }
         }
