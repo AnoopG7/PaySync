@@ -12,7 +12,7 @@
 2. [Prerequisites](#2-prerequisites)
 3. [Infrastructure Deployment (Terraform)](#3-infrastructure-deployment-terraform)
 4. [EC2 Bootstrap & Application Launch](#4-ec2-bootstrap--application-launch)
-5. [CI/CD Setup (Jenkins)](#5-cicd-setup-jenkins)
+5. [CI/CD Pipeline (Jenkins)](#5-cicd-pipeline-jenkins)
 6. [Monitoring Setup (CloudWatch)](#6-monitoring-setup-cloudwatch)
 7. [Maintenance & Operations](#7-maintenance--operations)
 8. [Troubleshooting](#8-troubleshooting)
@@ -46,18 +46,12 @@ terraform plan                # Review — should show ~25 resources to create
 terraform apply               # Type "yes" — takes ~5 minutes (RDS is the slow part)
 terraform output > ../stack-outputs.txt   # Save outputs for reference
 
-# ── Step 4: SSH in — fix RDS host, start containers ──
+# ── Step 4: SSH in and verify everything is running ──
 EC2_IP=$(terraform output -raw ec2_public_ip)
-RDS_EP=$(terraform output -raw rds_endpoint | cut -d: -f1)
-
-# The bootstrap already cloned the repo, installed Docker, Jenkins, CloudWatch.
-# But .env has a placeholder DB_HOST. Fix it with a single sed command:
 ssh -i ~/.ssh/ec2-key.pem ubuntu@$EC2_IP
-sudo sed -i "s/DB_HOST=.*/DB_HOST=$RDS_EP/" /opt/paysync/.env
-cd /opt/paysync && sudo docker compose up -d
 
-# Verify:
-curl -sf http://localhost/api/health && echo "OK"   # should return 200
+# Verify the app:
+curl -sf http://localhost/api/health && echo "OK"   # should return {"status":"ok"}
 curl -sI http://localhost | head -1                  # HTTP/1.1 200 OK
 
 # ── Done! Open in your browser ──
@@ -240,8 +234,8 @@ It runs as root and produces a log at `/var/log/paysync-init.log`. Here is exact
 | 3a | **Install Docker** | `get.docker.com` script → Docker Engine + systemctl enable/start |
 | 3b | **Install Node.js 22.x** | Nodesource `setup_22.x` → `apt install nodejs` — needed for Jenkins pipeline (npm ci, tsc) |
 | 4 | **Clone Repository** | `git clone https://github.com/AnoopG7/PaySync.git` → `/opt/paysync` |
-| 5 | **Create .env** | Generates `.env` with placeholder `DB_HOST=__REPLACE_ME__`, random JWT secret |
-| 5 | **Start Docker Compose** | `docker compose up --build -d` — containers run but backend will crash until RDS host is fixed |
+| 5 | **Create .env** | Generates `.env` with real `DB_HOST` (injected by Terraform `replace()`), random JWT secret |
+| 5 | **Start Docker Compose** | `docker compose up --build -d` — containers start and connect to RDS immediately |
 | 6 | **Health Check** | Sleep 10s, then verify containers + curl `localhost/api/health` |
 | 7 | **CloudWatch Setup** | Calls `setup-cloudwatch.sh` — installs agent, attempts dashboard (may fail without IAM) |
 | 7 | **Jenkins Setup** | Calls `setup-jenkins.sh` — installs Java 21 + Jenkins LTS + inline pipeline, logs: `admin/admin123` |
@@ -263,37 +257,18 @@ ssh -i ~/.ssh/ec2-key.pem ubuntu@$EC2_IP
 sudo tail -50 /var/log/paysync-init.log
 ```
 
-### 4.3 Fix the RDS Host in .env
+### 4.3 Verify the Application
 
-The bootstrap created `.env` with a placeholder `DB_HOST=__REPLACE_ME__`.  
-You must replace it with the actual RDS endpoint from terraform output:
-
-```bash
-# Get the RDS endpoint (from your Mac, not from EC2):
-RDS_EP=$(terraform output -raw rds_endpoint | cut -d: -f1)
-# cut -d: -f1 strips the ":3306" port suffix
-
-# Inside the SSH session, run:
-sudo sed -i "s/DB_HOST=.*/DB_HOST=$RDS_EP/" /opt/paysync/.env
-
-# Verify it worked:
-cat /opt/paysync/.env | grep DB_HOST
-# Output: DB_HOST=paysync-mysql.xxxxxx.ap-south-1.rds.amazonaws.com
-```
-
-### 4.4 Launch the Application
+The bootstrap already started everything. Verify it's all running:
 
 ```bash
-cd /opt/paysync
-sudo docker compose up -d
-
-# Check everything is running:
+# Check containers:
 docker compose ps
 # Both backend and frontend should show "Up"
 
-# Verify the API is healthy (via Nginx reverse proxy on port 80):
+# Verify the API is healthy:
 curl http://localhost/api/health
-# Should return JSON: {"status":"ok","timestamp":"..."}
+# Should return: {"status":"ok","service":"PaySync Cloud API"}
 
 # Verify the frontend is served:
 curl -sI http://localhost | head -1
@@ -303,10 +278,10 @@ curl -sI http://localhost | head -1
 If the backend fails to start, check logs:
 ```bash
 docker compose logs --tail=50 backend
-# Common issue: ECONNREFUSED → RDS host is wrong or security group isn't set.
+# Common issue: ECONNREFUSED → RDS security group isn't allowing traffic from EC2.
 ```
 
-### 4.5 Verify from Your Browser
+### 4.4 Access from Your Browser
 
 ```bash
 # From your Mac:
@@ -323,7 +298,7 @@ You should see the PaySync login page. Use these demo accounts:
 
 ---
 
-## 5. CI/CD Setup (Jenkins)
+## 5. CI/CD Pipeline (Jenkins)
 
 Jenkins runs **natively on EC2** (apt install, systemd service on port 8080).  
 It is NOT in Docker — this avoids Docker-in-Docker complexity and gives Jenkins direct access to the host Docker socket.
@@ -355,7 +330,7 @@ The Jenkins setup script performs these steps:
 | 7 | **Start Jenkins** | `systemctl enable --now jenkins` + wait loop (up to 3 min) |
 | 8 | **Create pipeline job** | Generates `config.xml` with inline `CpsFlowDefinition` — creates `paysync-pipeline` job |
 | 9 | **Install plugins** | Jenkins CLI: `git`, `workflow-aggregator`, `blueocean` |
-| 10 | **Auto-build (deferred)** | Triggers a build **only if** `.env` has a real RDS host (checks for `__REPLACE_ME__`). If placeholder found, prints the manual trigger command. |
+| 10 | **Auto-build** | Triggers the pipeline build immediately. `.env` has the real RDS endpoint (injected by Terraform `replace()`), so the build runs and deploys successfully. |
 
 ### 5.3 Pipeline Stages
 
@@ -383,8 +358,8 @@ Checkout → Prepare Environment → Install Dependencies (parallel)
 
 ### 5.4 Trigger a Build
 
-Auto-build is skipped if `.env` still has the placeholder `__REPLACE_ME__`.  
-Once you've fixed the RDS host (step 4.3), trigger a build:
+The pipeline auto-triggers during bootstrap since `.env` has the real RDS endpoint.  
+To manually re-trigger a build:
 
 **Option A — Jenkins UI:**
 
@@ -784,7 +759,7 @@ groups jenkins
 | `Connection refused` on port 80 | Nginx container not running | `docker compose ps` — if backend/frontend missing, check logs |
 | `ECONNREFUSED` from backend logs | Backend can't reach RDS | Verify `.env` DB_HOST is correct; check RDS SG allows traffic from EC2 SG |
 | `Access denied for user 'paysync_admin'@'...'` | Wrong RDS password in `.env` | Check `DB_PASSWORD` in `/opt/paysync/.env` matches `rds_master_password` in `terraform.tfvars` |
-| `getaddrinfo ENOTFOUND` in backend | DB_HOST is still `__REPLACE_ME__` (placeholder) | Run the `sed` command from step 4.3 to fix it |
+| `getaddrinfo ENOTFOUND` in backend | DB_HOST is wrong or unreachable | Check `.env` DB_HOST value; verify RDS SG allows traffic from EC2 SG |
 | Disk full (`No space left on device`) | Docker logs or old images accumulated | `sudo /opt/paysync/scripts/rotate-logs.sh` + `docker system prune -af` |
 | `terraform apply` fails on RDS creation | RDS instance name already taken in the region | Change `rds_db_name` in `variables.tf` or delete the old RDS instance |
 | `key pair 'ec2-key' not found` | Key pair doesn't exist in ap-south-1 | Create it in AWS Console (EC2 → Key Pairs → Create), or change `key_pair_name` |
@@ -849,6 +824,52 @@ rm -rf .terraform terraform.tfstate*
 
 ---
 
+## Appendix: Scripts Reference
+
+### How Scripts Are Executed
+
+| Script | Runs Automatically? | Trigger | Purpose |
+|--------|-------------------|---------|---------|
+| `server-init.sh` | ✅ First boot only | EC2 user_data (Terraform) | Bootstrap orchestrator — installs deps, Docker, Node.js, clones repo, starts app, calls scripts below |
+| `setup-jenkins.sh` | ✅ During bootstrap | Called by `server-init.sh` Step 7b | Installs Java 21 + Jenkins LTS + plugins + Blue Ocean + inline pipeline config + triggers build |
+| `setup-cloudwatch.sh` | ✅ During bootstrap | Called by `server-init.sh` Step 7a | Installs CloudWatch agent, writes config, starts agent, attempts dashboard (fails without IAM role) |
+| `setup-cron.sh` | ✅ During bootstrap | Called by `server-init.sh` Step 7c | Installs crontab for health-check, backup, log-rotate, docker-prune |
+| `health-check.sh` | ✅ Every 5 minutes | Cron (installed by `setup-cron.sh`) | Checks: API health, Docker containers running, disk usage (>80% alert), memory (>80% alert), backend JSON response validity. Writes alerts to `/var/log/paysync/health-alerts.log` |
+| `backup.sh` | ✅ Daily at 2 AM | Cron (installed by `setup-cron.sh`) | `mysqldump` from RDS → gzip → `/opt/paysync/backups/paysync-YYYY-MM-DD.sql.gz`. 30-day retention. Optional S3 upload. Supports both MySQL and SQLite. Displays RPO (1hr) and RTO (4hrs) |
+| `rotate-logs.sh` | ✅ Weekly Sun 3 AM | Cron (installed by `setup-cron.sh`) | Snapshots last 5000 lines of each Docker container log, compresses with gzip, truncates Docker log files to reclaim disk, vacuums system journal to 7 days, deletes archives older than 30 days |
+| `deploy-app.sh` | ❌ Manual | `sudo bash /opt/paysync/scripts/deploy-app.sh [branch]` | Git pull → docker compose build → up -d → health check. Also called by Jenkins pipeline. Use `--restart-only` flag to skip git pull |
+| `manage-users.sh` | ❌ Manual | `sudo bash /opt/paysync/scripts/manage-users.sh <command> [args]` | Linux user/group admin. Commands: `add <user>` (creates with docker + sudo groups), `remove <user>`, `list`, `add-to-group <user> <group>`, `ssh-key <user> <pubkey>` |
+| `monitor-system.sh` | ❌ Manual | `sudo bash /opt/paysync/scripts/monitor-system.sh` | Generates a full diagnostic report: uptime, load averages, CPU/memory (top 6 processes), disk usage, largest dirs under `/opt/paysync`, Docker containers, last 10 kernel messages, listening ports, network connections. Also includes a troubleshooting cheat sheet for `ps`, `journalctl`, `docker logs`, `curl`, `df`, `lsof` commands |
+
+### Linux Administration — Requirement Coverage
+
+| Requirement | How It's Fulfilled | Related Script(s) |
+|------------|-------------------|-------------------|
+| **Configure Linux servers** | `server-init.sh` runs `apt update/upgrade`, installs Docker, Node.js 22.x, git, curl, htop, ufw. Sets up Docker Compose plugin | `server-init.sh` |
+| **Users & groups** | `manage-users.sh` handles full user lifecycle. Bootstrap adds `ubuntu` and `jenkins` to `docker` group | `manage-users.sh`, `server-init.sh` |
+| **File permissions** | Bootstrap runs `chmod -R 755 /opt/paysync/` + `chmod 640 .env` with `chgrp docker` for security | `server-init.sh` |
+| **Package management** | `apt-get` used for system packages, `get.docker.com` for Docker, `nodesource` for Node.js, `dpkg -i` for CloudWatch agent | `server-init.sh`, `setup-cloudwatch.sh` |
+| **Process monitoring** | `health-check.sh` runs every 5 min. Checks backend API status, whether Docker containers are running, validates JSON response. Also `monitor-system.sh` for ad-hoc diagnostics | `health-check.sh`, `monitor-system.sh` |
+| **System logs** | `rotate-logs.sh` compresses Docker logs, vacuums system journal. `health-check.sh` writes to `/var/log/paysync/health-alerts.log`. CloudWatch agent ships logs to `/aws/ec2/paysync/` log groups | `rotate-logs.sh`, `health-check.sh`, `setup-cloudwatch.sh` |
+| **Troubleshooting** | `monitor-system.sh` provides a complete system snapshot + cheat sheet of Linux diagnostics commands (ps, journalctl, docker logs, df, lsof, ss, netstat, curl) | `monitor-system.sh` |
+| **Cron automation** | `setup-cron.sh` installs crontab at `/etc/cron.d/paysync` with 4 entries: health-check (5min), backup (daily 2am), log-rotate (weekly Sun 3am), docker prune (daily 4am) | `setup-cron.sh` |
+
+### Where Scripts Are Located
+
+All scripts are at `/opt/paysync/scripts/` on the EC2 instance. They are cloned from GitHub during bootstrap:
+
+```bash
+# List all scripts
+ls -la /opt/paysync/scripts/
+
+# Run any script manually
+sudo bash /opt/paysync/scripts/monitor-system.sh
+```
+
+Path format: `scripts/<script-name>` in the Git repo, `/opt/paysync/scripts/<script-name>` on EC2.
+
+---
+
 ## Appendix: Quick Reference
 
 ### Useful Commands
@@ -904,7 +925,7 @@ docker compose exec backend node -e "console.log(process.env.DB_HOST)"  # Check 
 | Path | Purpose |
 |---|---|
 | `/opt/paysync/` | Application code (cloned from GitHub) |
-| `/opt/paysync/.env` | Environment variables (DB_HOST, JWT_SECRET, etc.) — **fix DB_HOST after SSH** |
+| `/opt/paysync/.env` | Environment variables (DB_HOST, JWT_SECRET, DB_PASSWORD, etc.) — injected by Terraform `replace()` |
 | `/opt/paysync/scripts/` | All shell scripts (setup, deploy, backup, health-check, etc.) |
 | `/opt/paysync/backups/` | Daily database backups (auto-deleted after 30 days) |
 | `/var/log/paysync-init.log` | Bootstrap log — check if `server-init.sh` had errors |

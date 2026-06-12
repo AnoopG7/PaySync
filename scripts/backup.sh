@@ -18,6 +18,8 @@ set -euo pipefail
 
 # ── Configuration ──
 PAYSYNC_HOME="/opt/paysync"
+# Source .env for DB_TYPE, DB_HOST, DB_PASSWORD, etc.
+[ -f "$PAYSYNC_HOME/.env" ] && source "$PAYSYNC_HOME/.env"
 BACKUP_DIR="${PAYSYNC_HOME}/backups"
 RETENTION_DAYS=30
 TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")

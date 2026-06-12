@@ -111,7 +111,7 @@ role-based access control (RBAC), and automated reporting workflows.
 | **Internet Gateway** | Public internet connectivity for VPC |
 | **EC2 (m7i-flex.large)** | Runs Docker Engine; hosts Nginx + API + Frontend + Jenkins containers |
 | **RDS (db.t4g.micro)** | Managed MySQL 8.0; automated backups |
-| **CloudWatch** | CPU ≥80% alarm; disk fill alarm; status check alarm |
+| **CloudWatch** | 7 alarm configs (manual deployment); agent installed but needs IAM role |
 | **S3** | (Optional) Backup archival; static asset storage |
 
 ---
@@ -130,11 +130,12 @@ role-based access control (RBAC), and automated reporting workflows.
 
 **Bootstrap sequence** (`server-init.sh`):
 1. Update system packages
-2. Install Docker Engine & docker compose plugin
+2. Install Docker Engine & docker compose plugin, Node.js 22.x
 3. Enable & start Docker daemon
-4. Clone application repository
-5. Create `.env` from template
-6. Run `docker compose up -d`
+4. Clone application repository from GitHub
+5. Create `.env` with real RDS endpoint (injected by Terraform `replace()`)
+6. Run `docker compose up --build -d`
+7. Install CloudWatch agent (`setup-cloudwatch.sh`), Jenkins + pipeline (`setup-jenkins.sh`), cron jobs (`setup-cron.sh`)
 
 ### 3.2 Container Architecture
 
@@ -230,8 +231,9 @@ prevents disk exhaustion.
 
 ### 6.1 Jenkins Pipeline Stages
 
-Jenkins runs as a Docker container on the same EC2 as the application, with
-the Docker socket mounted so it can build and deploy locally.
+Jenkins runs **natively on the EC2 host** (apt install, systemd, port 8080).
+The `jenkins` user is added to the `docker` group so the pipeline can run
+`docker compose` commands directly — no Docker-in-Docker needed.
 
 ```
  ┌─────────┐  ┌────────────┐  ┌──────────────┐  ┌────────────┐  ┌──────────┐
@@ -257,13 +259,21 @@ No Docker Hub push or SSH deploy needed — everything runs on the same host.
 
 ## 7. Monitoring & Observability
 
-### 7.1 CloudWatch Alarms
+### 7.1 CloudWatch Alarms (Manual Setup)
 
-| Alarm | Metric | Threshold | Action |
-|---|---|---|---|
-| **High CPU** | EC2 CPUUtilization | ≥80% for 5 min | SNS notification |
-| **Disk Full** | EC2 disk_space (root) | ≥90% | SNS notification |
-| **Status Check** | EC2 StatusCheckFailed | Any failure | SNS notification |
+7 alarm configs are defined in `cloudwatch/alarms.json` but not automatically deployed.
+The EC2 has no IAM role, so CloudWatch agent metrics don't flow. Alarms can be created
+from your local machine via AWS CLI (see `docs/aws-deployment.md` §6).
+
+| Alarm | Metric | Threshold |
+|---|---|---|
+| **CPU High** | AWS/EC2 CPUUtilization | ≥80% for 5 min |
+| **Status Check Failed** | AWS/EC2 StatusCheckFailed | ≥1 for 1 min |
+| **Disk High** | CWAgent disk_used_percent | ≥90% for 5 min |
+| **Memory High** | CWAgent mem_used_percent | ≥90% for 5 min |
+| **RDS CPU High** | AWS/RDS CPUUtilization | ≥80% for 5 min |
+| **RDS Connections High** | AWS/RDS DatabaseConnections | ≥20 for 5 min |
+| **RDS Storage Low** | AWS/RDS FreeStorageSpace | <5 GB for 5 min |
 
 ### 7.2 Health Check Script (`health-check.sh`)
 
@@ -347,7 +357,7 @@ Runs every 5 minutes via cron and checks:
 | **RDS** | db.t4g.micro | $0.00 (free tier: 750 hrs/mo, 20 GB) |
 | **EBS** | 20 GB gp3 | ~$2.00/mo |
 | **Data transfer** | ~50 GB out | ~$4.50/mo |
-| **CloudWatch** | 10 metrics + 3 alarms | ~$1.00/mo |
+| **CloudWatch** | Agent + 7 alarms (manual setup) | ~$1.00/mo |
 | **S3** (backups) | 5 GB | ~$0.10/mo |
 | **Total** | | **~$81.18/mo** |
 
