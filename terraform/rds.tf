@@ -49,7 +49,7 @@ resource "aws_db_instance" "mysql" {
   identifier = "${var.project_name}-mysql"
 
   engine         = "mysql"
-  engine_version = "8.0.40"
+  engine_version        = "8.0.44"
   instance_class = var.rds_instance_class
 
   allocated_storage     = var.rds_allocated_storage
@@ -66,7 +66,7 @@ resource "aws_db_instance" "mysql" {
   vpc_security_group_ids = [aws_security_group.rds.id]
   publicly_accessible    = false
 
-  backup_retention_period = 7
+  backup_retention_period = 1
   backup_window           = "03:00-04:00"
   maintenance_window      = "sun:04:00-sun:05:00"
   copy_tags_to_snapshot   = true

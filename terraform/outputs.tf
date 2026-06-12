@@ -64,7 +64,7 @@ output "rds_security_group_id" {
 
 output "ssh_command" {
   description = "SSH command to connect to the EC2 instance"
-  value       = "ssh -i ~/.ssh/id_rsa ubuntu@${aws_instance.app.public_ip}"
+  value       = "ssh -i ~/.ssh/ec2-key.pem ubuntu@${aws_instance.app.public_ip}"
 }
 
 output "jenkins_url" {

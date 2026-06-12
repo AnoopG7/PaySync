@@ -1,32 +1,5 @@
-// ──────────────────────────────────────────────────────────────────────────────
-// PaySync Cloud — Jenkins Declarative Pipeline
-// ──────────────────────────────────────────────────────────────────────────────
-// CI/CD pipeline that runs ON the EC2 instance alongside the app (Jenkins
-// runs as a Docker container). All stages execute locally — no SSH deploy,
-// no Docker Hub push required.
-//
-// Pipeline stages:
-//   1. Checkout code from GitHub
-//   2. Install dependencies (npm ci)
-//   3. Lint & type check (tsc --noEmit)
-//   4. Build Docker images
-//   5. Deploy: docker compose up -d
-//   6. Health check verification
-//
-// Prerequisites (configure in Jenkins):
-//   - Pipeline runs on the built-in node (Docker host)
-//   - No credentials needed — Docker socket is mounted
-//   - Git plugin for SCM checkout
-//
-// ──────────────────────────────────────────────────────────────────────────────
-
 pipeline {
     agent any
-
-    environment {
-        COMPOSE_FILE = 'docker-compose.yml'
-        APP_DIR      = '/opt/paysync'
-    }
 
     parameters {
         string(
@@ -41,8 +14,14 @@ pipeline {
             steps {
                 checkout scmGit(
                     branches: [[name: "${params.BRANCH}"]],
-                    userRemoteConfigs: [[url: 'https://github.com/YOUR_ORG/paysync-cloud.git']]
+                    userRemoteConfigs: [[url: 'https://github.com/AnoopG7/PaySync.git']]
                 )
+            }
+        }
+
+        stage('Prepare Environment') {
+            steps {
+                sh 'cp /opt/paysync/.env .env || echo "No .env to copy"'
             }
         }
 
@@ -86,14 +65,14 @@ pipeline {
 
         stage('Build Docker Images') {
             steps {
-                sh 'docker compose -f ${COMPOSE_FILE} build'
+                sh 'docker compose -p paysync build'
             }
         }
 
         stage('Deploy') {
             steps {
                 sh '''
-                    docker compose -f ${COMPOSE_FILE} up -d --remove-orphans
+                    docker compose -p paysync up -d --remove-orphans backend frontend
                     docker image prune -af --filter "until=24h" || true
                 '''
             }
@@ -102,7 +81,7 @@ pipeline {
         stage('Health Check') {
             steps {
                 sleep 5
-                sh 'curl -sf http://localhost/api/health && echo "Health OK" || echo "Health FAIL"'
+                sh 'curl -sf http://localhost:3001/api/health && echo "Health OK" || echo "Health FAIL"'
             }
         }
     }

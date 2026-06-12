@@ -5,9 +5,7 @@ services:
       - "3001:3001"
     volumes:
       - paysync-data:/app/data
-    environment:
-      - DB_TYPE=sqlite
-      - JWT_SECRET=paysync-docker-secret
+    env_file: .env
     restart: unless-stopped
 
   frontend:
@@ -18,18 +16,5 @@ services:
       - backend
     restart: unless-stopped
 
-  jenkins:
-    image: jenkins/jenkins:lts
-    ports:
-      - "8080:8080"
-    volumes:
-      - jenkins-home:/var/jenkins_home
-      - /var/run/docker.sock:/var/run/docker.sock
-      - /usr/bin/docker:/usr/bin/docker
-    environment:
-      - JAVA_OPTS=-Djenkins.install.runSetupWizard=false -Xmx256m -Xms128m
-    restart: unless-stopped
-
 volumes:
   paysync-data:
-  jenkins-home:

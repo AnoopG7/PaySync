@@ -53,7 +53,7 @@ resource "aws_vpc_security_group_ingress_rule" "http" {
   from_port         = 80
   to_port           = 80
   ip_protocol       = "tcp"
-  description       = "HTTP — Frontend"
+  description       = "HTTP - Frontend"
 }
 
 # HTTPS — for TLS termination (future: ACM)
@@ -90,12 +90,9 @@ resource "aws_instance" "app" {
   instance_type          = var.ec2_instance_type
   subnet_id              = aws_subnet.public.id
   vpc_security_group_ids = [aws_security_group.ec2.id]
-  key_name               = aws_key_pair.deploy.key_name
+  key_name               = var.key_pair_name
 
-  user_data = templatefile("${path.module}/../scripts/server-init.sh", {
-    GIT_REPO_URL = "https://github.com/YOUR_ORG/paysync-cloud.git"
-    DEPLOY_BRANCH = "main"
-  }))
+  user_data = file("${path.module}/../scripts/server-init.sh")
 
   root_block_device {
     volume_size = 20
@@ -109,12 +106,6 @@ resource "aws_instance" "app" {
   }
 
   tags = { Name = "${var.project_name}-app-server" }
-}
-
-# ── SSH Key Pair ──
-resource "aws_key_pair" "deploy" {
-  key_name   = "${var.project_name}-deploy-key"
-  public_key = file(var.public_key_path)
 }
 
 # ── Elastic IP (static public IP for the app) ──

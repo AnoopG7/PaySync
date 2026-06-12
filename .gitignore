@@ -1,0 +1,21 @@
+# ── Terraform ──
+terraform/.terraform/
+terraform/terraform.tfstate
+terraform/terraform.tfstate.*
+terraform/terraform.tfvars
+
+# ── Environment ──
+.env
+
+# ── OS ──
+.DS_Store
+Thumbs.db
+
+# ── IDE ──
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── Logs ──
+*.log

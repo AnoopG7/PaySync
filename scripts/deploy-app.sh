@@ -41,7 +41,7 @@ if [[ "${1:-}" != "--restart-only" ]]; then
     if [[ ! -d "$PAYSYNC_HOME/.git" ]]; then
         log "[!] Not a Git repository. Cloning fresh copy..."
         cd /tmp
-        git clone https://github.com/YOUR_ORG/paysync-cloud.git paysync-tmp
+        git clone https://github.com/AnoopG7/PaySync.git paysync-tmp
         rsync -a paysync-tmp/ "$PAYSYNC_HOME/"
         rm -rf paysync-tmp
     else

@@ -14,5 +14,6 @@ ssh_allowed_cidr = "203.0.113.5/32"
 # ── REQUIRED: RDS master password ──
 rds_master_password = "YourStrongPassword123!"
 
-# ── REQUIRED: Path to SSH public key (no default — file() won't expand ~) ──
-public_key_path = "/Users/you/.ssh/id_rsa.pub"
+# ── REQUIRED: Name of your existing AWS key pair (created in AWS Console, ap-south-1) ──
+# Your .pem file sits locally; Terraform just needs the name.
+key_pair_name = "ec2-key"

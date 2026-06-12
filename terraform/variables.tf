@@ -73,8 +73,8 @@ variable "ssh_allowed_cidr" {
   type        = string
 }
 
-variable "public_key_path" {
-  description = "Path to your SSH public key (e.g. /Users/you/.ssh/id_rsa.pub). Terraform's file() does NOT expand ~ — use an absolute path."
+variable "key_pair_name" {
+  description = "Name of your existing AWS key pair in ap-south-1 (created in AWS Console). Example: ec2-key"
   type        = string
 }
 
