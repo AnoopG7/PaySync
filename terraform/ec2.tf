@@ -92,7 +92,11 @@ resource "aws_instance" "app" {
   vpc_security_group_ids = [aws_security_group.ec2.id]
   key_name               = var.key_pair_name
 
-  user_data = file("${path.module}/../scripts/server-init.sh")
+  user_data = replace(
+    file("${path.module}/../scripts/server-init.sh"),
+    "__REPLACE_ME__",
+    aws_db_instance.mysql.address
+  )
 
   root_block_device {
     volume_size = 20

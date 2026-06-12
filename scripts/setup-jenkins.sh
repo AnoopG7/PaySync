@@ -41,14 +41,14 @@ echo "[3/6] Configuring Jenkins..."
 usermod -aG docker jenkins
 echo "[✓] jenkins user added to docker group"
 
-# Create systemd override: skip setup wizard + limit memory
+# Create systemd override: limit memory (setup wizard handled by init.groovy.d)
 mkdir -p /etc/systemd/system/jenkins.service.d
 cat > /etc/systemd/system/jenkins.service.d/override.conf << 'OVERRIDE'
 [Service]
-Environment="JAVA_OPTS=-Djenkins.install.runSetupWizard=false -Xmx256m -Xms128m"
+Environment="JAVA_OPTS=-Xmx256m -Xms128m"
 OVERRIDE
 
-# Create init.groovy.d script to set up admin user + CSRF off + URL
+# Create init.groovy.d script to set up admin user + URL
 mkdir -p /var/lib/jenkins/init.groovy.d
 cat > /var/lib/jenkins/init.groovy.d/setup.groovy << 'GROOVY'
 import jenkins.model.*
@@ -58,28 +58,31 @@ import jenkins.security.s2m.AdminWhitelistRule
 def instance = Jenkins.getInstanceOrNull()
 if (instance == null) return
 
-if (instance.getSecurity() == null) {
-    println "Setting up security: admin/admin123..."
-    def hudsonRealm = new HudsonPrivateSecurityRealm(false)
-    hudsonRealm.createAccount("admin", "admin123")
-    instance.setSecurityRealm(hudsonRealm)
-    instance.setAuthorizationStrategy(new FullControlOnceLoggedInAuthorizationStrategy())
-    instance.save()
-    instance.getInjector().getInstance(AdminWhitelistRule.class).setMasterKillSwitch(false)
-    println "Security configured: admin/admin123"
-} else {
-    println "Security already configured — skipping (use existing credentials)"
+// Force admin user with known password (delete + recreate)
+def hudsonRealm = new HudsonPrivateSecurityRealm(false)
+try {
+    hudsonRealm.deleteUser("admin")
+    println "Deleted existing admin user"
+} catch (e) {
+    println "No existing admin user to delete"
 }
+hudsonRealm.createAccount("admin", "admin123")
+println "Created admin user: admin / admin123"
+instance.setSecurityRealm(hudsonRealm)
+instance.setAuthorizationStrategy(new FullControlOnceLoggedInAuthorizationStrategy())
+instance.save()
 
-if (!instance.isQuietingDown()) {
-    def ip = new URL("http://checkip.amazonaws.com").text.trim()
-    def url = "http://${ip}:8080/"
-    def loc = JenkinsLocationConfiguration.get()
-    loc.setUrl(url)
-    loc.setAdminAddress("admin@paysync.cloud")
-    loc.save()
-    println "URL set to: $url"
-}
+// Disable CLI agent whitelist
+instance.getInjector().getInstance(AdminWhitelistRule.class).setMasterKillSwitch(false)
+
+// Set Jenkins URL
+def ip = new URL("http://checkip.amazonaws.com").text.trim()
+def url = "http://${ip}:8080/"
+def loc = JenkinsLocationConfiguration.get()
+loc.setUrl(url)
+loc.setAdminAddress("admin@paysync.cloud")
+loc.save()
+println "Jenkins URL set to: $url"
 GROOVY
 
 systemctl daemon-reload

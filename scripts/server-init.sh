@@ -114,9 +114,7 @@ if [[ ! -f .env ]]; then
     JWT_SECRET="paysync-ec2-$(openssl rand -hex 16)"
     cat > .env << EOF
 # ── Database (RDS MySQL) ──
-# FIX_ME: Replace DB_HOST with the actual RDS endpoint from terraform output.
-#   terraform output -raw rds_endpoint  |  cut -d: -f1
-# Example: paysync-mysql.xxxxxxxxxxxx.ap-south-1.rds.amazonaws.com
+# DB_HOST is injected by Terraform at apply time (replace in ec2.tf)
 DB_TYPE=mysql
 DB_HOST=${RDS_HOST:-__REPLACE_ME__}
 DB_PORT=3306
@@ -130,7 +128,7 @@ JWT_SECRET=$JWT_SECRET
 # ── Backend Port ──
 PORT=3001
 EOF
-    echo "[*] Created .env (placeholder RDS_HOST — fix after SSH!)"
+    echo "[*] Created .env (DB_HOST from Terraform: $(grep DB_HOST .env | cut -d= -f2))"
 fi
 
 # Add ubuntu user to docker group
