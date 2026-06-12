@@ -157,7 +157,7 @@ lines.append('            }')
 lines.append('        }')
 lines.append('        stage("Health Check") {')
 lines.append('            steps {')
-lines.append('                sleep 5')
+lines.append('                sleep 15')
 lines.append('                sh "curl -sf http://localhost:3001/api/health && echo Health OK || echo Health FAIL"')
 lines.append('            }')
 lines.append('        }')
@@ -216,17 +216,24 @@ CRUMB_JSON=$(curl -s -u "admin:admin123" -c "$JENKINS_COOKIE" "$JENKINS_URL/crum
 CRUMB=$(echo "$CRUMB_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['crumb'])" 2>/dev/null || echo "")
 CRUMB_HEADER=$(echo "$CRUMB_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['crumbRequestField'])" 2>/dev/null || echo "Jenkins-Crumb")
 
-# Install plugins via Script Console (CLI jar broken in Jenkins 2.555+ due to CSRF)
-echo "[*] Installing plugins..."
-PLUGINS="git workflow-aggregator blueocean"
+# Install plugins via Script Console — equivalent to "Install suggested plugins" + Blue Ocean
+echo "[*] Installing default plugins..."
+PLUGINS="ant build-timeout credentials-binding email-ext git github-branch-source jackson2-api mailer matrix-auth pipeline-build-step pipeline-graph-analysis pipeline-input-step pipeline-milestone-step pipeline-stage-view plain-credentials ssh-slaves timestamper ws-cleanup workflow-aggregator"
 for plugin in $PLUGINS; do
-    echo "  Installing $plugin..."
-    RESULT=$(curl -s -X POST -u "admin:admin123" -b "$JENKINS_COOKIE" \
+    echo "  $plugin..."
+    curl -s -X POST -u "admin:admin123" -b "$JENKINS_COOKIE" \
       -H "${CRUMB_HEADER}: ${CRUMB}" \
       "$JENKINS_URL/scriptText" \
-      --data-urlencode "script=Jenkins.instance.pluginManager.install(Arrays.asList(\"$plugin\"), false).each{ println it.get() }" 2>/dev/null)
-    echo "    $RESULT"
+      --data-urlencode "script=Jenkins.instance.pluginManager.install(Arrays.asList(\"$plugin\"), false).each{ it.get() }" > /dev/null 2>&1
 done
+
+echo "[*] Installing Blue Ocean..."
+curl -s -X POST -u "admin:admin123" -b "$JENKINS_COOKIE" \
+  -H "${CRUMB_HEADER}: ${CRUMB}" \
+  "$JENKINS_URL/scriptText" \
+  --data-urlencode "script=Jenkins.instance.pluginManager.install(Arrays.asList(\"blueocean\"), false).each{ it.get() }" > /dev/null 2>&1
+
+echo "[*] Plugins installed (will load after restart)"
 
 # Restart to load plugins
 echo "[*] Restarting to load plugins..."
